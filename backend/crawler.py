@@ -405,7 +405,11 @@ async def crawl_feeds(
 
             # Batch commit every 10 articles
             if summarized_count % 10 == 0:
-                db.commit()
+                try:
+                    db.commit()
+                except Exception as commit_err:
+                    logger.error("Batch commit failed: %s", commit_err)
+                    db.rollback()
             if progress_callback:
                 progress_callback(
                     {
@@ -418,7 +422,11 @@ async def crawl_feeds(
                 )
 
         # Commit any remaining articles not yet committed by the batch logic
-        db.commit()
+        try:
+            db.commit()
+        except Exception as final_err:
+            logger.error("Final commit failed: %s", final_err)
+            db.rollback()
     finally:
         session.close()
         if browser is not None:

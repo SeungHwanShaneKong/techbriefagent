@@ -1,6 +1,6 @@
 from pydantic import BaseModel, ConfigDict
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 
 class AISummaryBase(BaseModel):
     summary_text: str
@@ -135,7 +135,7 @@ class DailyBriefResponse(BaseModel):
 
 # ── Chatbot schemas ──────────────────────────────────────────────────
 class ChatMessage(BaseModel):
-    role: str          # "user" | "assistant"
+    role: Literal["user", "assistant"]
     content: str
 
 class ChatbotRequest(BaseModel):

@@ -29,6 +29,7 @@ import uuid
 
 DAILY_BRIEF_CACHE: Dict[str, Dict[str, Any]] = {}
 CRAWL_JOB_LOCK = Lock()
+_RATE_LIMIT_LOCK = Lock()
 _last_crawl_time: float = 0.0
 CRAWL_RATE_LIMIT_SECONDS = 30
 _last_chatbot_time: float = 0.0
@@ -262,9 +263,11 @@ async def trigger_crawling(
     """
     global _last_crawl_time
     current_time = time.time()
-    if current_time - _last_crawl_time < CRAWL_RATE_LIMIT_SECONDS:
-        remaining = int(CRAWL_RATE_LIMIT_SECONDS - (current_time - _last_crawl_time))
-        raise HTTPException(status_code=429, detail=f"너무 빠른 요청입니다. {remaining}초 후 다시 시도해 주세요.")
+    with _RATE_LIMIT_LOCK:
+        if current_time - _last_crawl_time < CRAWL_RATE_LIMIT_SECONDS:
+            remaining = int(CRAWL_RATE_LIMIT_SECONDS - (current_time - _last_crawl_time))
+            raise HTTPException(status_code=429, detail=f"너무 빠른 요청입니다. {remaining}초 후 다시 시도해 주세요.")
+        _last_crawl_time = current_time
 
     state = get_crawl_state_snapshot()
     if state.get("is_running"):
@@ -278,7 +281,6 @@ async def trigger_crawling(
         }
 
     background_tasks.add_task(run_crawler_task, int(min_articles))
-    _last_crawl_time = current_time
     return {
         "status": f"배경 수집 시작: 최소 {min_articles}건 달성까지 반복 수집",
         "new_articles_count": 0,
