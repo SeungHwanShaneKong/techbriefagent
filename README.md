@@ -1,3 +1,13 @@
+---
+title: Tech News Hub
+emoji: 📰
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # 테.읽.남. (Tech News Hub) - AI 뉴스 인텔리전스 대시보드
 
 > 테크 읽어주는 남자 -- AI 기반 기술 뉴스 자동 수집/분석/리포팅 시스템
