@@ -1,5 +1,13 @@
-FROM python:3.10-slim
+# ── Stage 1: Build frontend ─────────────────────────────────────────
+FROM node:22-slim AS frontend-build
+WORKDIR /build
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
 
+# ── Stage 2: Python backend + static assets ────────────────────────
+FROM python:3.10-slim
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y \
@@ -15,6 +23,9 @@ RUN playwright install --with-deps chromium
 
 COPY backend /app/backend
 
+# Copy built frontend into /app/static (served by FastAPI)
+COPY --from=frontend-build /build/dist /app/static
+
 # Create default DB file and data directory for Render persistent disk
 RUN mkdir -p /app/data && touch /app/tech_news.db && touch /app/data/tech_news.db
 
@@ -22,6 +33,6 @@ RUN useradd --create-home appuser && chown -R appuser:appuser /app
 USER appuser
 
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=15s \
-    CMD curl -f http://localhost:8000/docs || exit 1
+    CMD curl -f http://localhost:8000/api/crawl-status || exit 1
 
 CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]

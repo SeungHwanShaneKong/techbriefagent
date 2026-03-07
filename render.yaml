@@ -1,6 +1,7 @@
 # ============================================================
-#  Render.com Blueprint - Tech News Intelligence Hub (Backend)
+#  Render.com Blueprint - Tech News Intelligence Hub (Full-Stack)
 # ============================================================
+#  단일 서비스로 FastAPI 백엔드 + React 프론트엔드 함께 서빙
 #  배포: Render Dashboard → New → Blueprint → 이 레포 연결
 #  https://render.com/docs/blueprint-spec
 # ============================================================
@@ -13,7 +14,7 @@ services:
     dockerContext: .
     plan: free
     region: oregon
-    healthCheckPath: /docs
+    healthCheckPath: /api/crawl-status
     envVars:
       - key: OPENAI_API_KEY
         sync: false
@@ -28,7 +29,7 @@ services:
       - key: DB_URL
         value: sqlite:////app/data/tech_news.db
       - key: CORS_ORIGINS
-        value: https://techbriefagent.vercel.app,http://localhost:5173,http://localhost:8501
+        value: "*"
       - key: LOG_LEVEL
         value: INFO
       - key: USD_TO_KRW_RATE

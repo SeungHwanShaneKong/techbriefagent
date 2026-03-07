@@ -4,8 +4,11 @@ import os
 from threading import Lock
 from typing import Any, Dict, List, Optional
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from pathlib import Path as _Path
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
@@ -748,3 +751,48 @@ async def websocket_logs(websocket: WebSocket):
     finally:
         if websocket in _ws_clients:
             _ws_clients.remove(websocket)
+
+
+# ── Static file serving (SPA) ──────────────────────────────────────
+# Serve the built React frontend when frontend/dist exists.
+_FRONTEND_DIR = _Path(__file__).resolve().parent.parent / "frontend" / "dist"
+# Also check /app/static for Docker deployments
+_STATIC_DIR = _Path("/app/static")
+
+def _get_spa_dir() -> _Path | None:
+    if _STATIC_DIR.is_dir() and (_STATIC_DIR / "index.html").exists():
+        return _STATIC_DIR
+    if _FRONTEND_DIR.is_dir() and (_FRONTEND_DIR / "index.html").exists():
+        return _FRONTEND_DIR
+    return None
+
+_spa_dir = _get_spa_dir()
+if _spa_dir is not None:
+    # Mount /assets as static files for JS/CSS bundles
+    _assets_dir = _spa_dir / "assets"
+    if _assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(_assets_dir)), name="static-assets")
+
+    @app.get("/favicon.ico")
+    async def favicon():
+        fav = _spa_dir / "favicon.ico"
+        if fav.exists():
+            return FileResponse(str(fav))
+        return FileResponse(str(_spa_dir / "index.html"))
+
+    @app.get("/{full_path:path}")
+    async def serve_spa(request: Request, full_path: str):
+        """Catch-all: serve static file if exists, otherwise index.html (SPA fallback)."""
+        # Don't intercept /api or /ws or /docs or /openapi.json
+        if full_path.startswith(("api/", "ws/", "docs", "redoc", "openapi.json")):
+            raise HTTPException(status_code=404)
+        # Try to serve the exact file
+        file_path = _spa_dir / full_path
+        if file_path.is_file():
+            return FileResponse(str(file_path))
+        # SPA fallback
+        return FileResponse(str(_spa_dir / "index.html"))
+
+    logger.info("SPA static serving enabled from: %s", _spa_dir)
+else:
+    logger.info("No frontend dist found – API-only mode")
