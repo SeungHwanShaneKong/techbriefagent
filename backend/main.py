@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 from pathlib import Path as _Path
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
@@ -30,6 +30,8 @@ import asyncio as _asyncio
 import time
 import uuid
 
+# ── Patch ID: FIX-429-RATE-LIMIT-20260307-153842 ──
+# Timestamp: 2026-03-07T15:38:42Z
 DAILY_BRIEF_CACHE: Dict[str, Dict[str, Any]] = {}
 CRAWL_JOB_LOCK = Lock()
 _RATE_LIMIT_LOCK = Lock()
@@ -37,8 +39,18 @@ _last_crawl_time: float = 0.0
 CRAWL_RATE_LIMIT_SECONDS = 30
 _last_chatbot_time: float = 0.0
 _last_brief_time: float = 0.0
-CHATBOT_RATE_LIMIT_SECONDS = 3
-BRIEF_RATE_LIMIT_SECONDS = 5
+CHATBOT_RATE_LIMIT_SECONDS = 2
+BRIEF_RATE_LIMIT_SECONDS = 2
+
+
+def rate_limit_response(remaining_seconds: float, detail: str) -> JSONResponse:
+    """Return a 429 response with Retry-After header for client-side backoff."""
+    retry_after = max(int(remaining_seconds) + 1, 1)
+    return JSONResponse(
+        status_code=429,
+        content={"detail": detail},
+        headers={"Retry-After": str(retry_after)},
+    )
 _ws_clients: list = []
 _log_queue: _asyncio.Queue = _asyncio.Queue(maxsize=500)
 
@@ -268,8 +280,8 @@ async def trigger_crawling(
     current_time = time.time()
     with _RATE_LIMIT_LOCK:
         if current_time - _last_crawl_time < CRAWL_RATE_LIMIT_SECONDS:
-            remaining = int(CRAWL_RATE_LIMIT_SECONDS - (current_time - _last_crawl_time))
-            raise HTTPException(status_code=429, detail=f"너무 빠른 요청입니다. {remaining}초 후 다시 시도해 주세요.")
+            remaining = CRAWL_RATE_LIMIT_SECONDS - (current_time - _last_crawl_time)
+            return rate_limit_response(remaining, f"너무 빠른 요청입니다. {int(remaining)}초 후 다시 시도해 주세요.")
         _last_crawl_time = current_time
 
     state = get_crawl_state_snapshot()
@@ -417,10 +429,11 @@ async def get_daily_brief(
     """
     global _last_brief_time
     current_time = time.time()
-    if current_time - _last_brief_time < BRIEF_RATE_LIMIT_SECONDS:
-        remaining = round(BRIEF_RATE_LIMIT_SECONDS - (current_time - _last_brief_time), 1)
-        raise HTTPException(status_code=429, detail=f"요청이 너무 빠릅니다. {remaining}초 후 다시 시도해 주세요.")
-    _last_brief_time = current_time
+    with _RATE_LIMIT_LOCK:
+        if current_time - _last_brief_time < BRIEF_RATE_LIMIT_SECONDS:
+            remaining = BRIEF_RATE_LIMIT_SECONDS - (current_time - _last_brief_time)
+            return rate_limit_response(remaining, f"요청이 너무 빠릅니다. {round(remaining, 1)}초 후 다시 시도해 주세요.")
+        _last_brief_time = current_time
 
     target_day = parse_target_date(target_date)
     if target_day > date.today():
@@ -649,10 +662,11 @@ async def chatbot_query(
 
     global _last_chatbot_time
     current_time = time.time()
-    if current_time - _last_chatbot_time < CHATBOT_RATE_LIMIT_SECONDS:
-        remaining = round(CHATBOT_RATE_LIMIT_SECONDS - (current_time - _last_chatbot_time), 1)
-        raise HTTPException(status_code=429, detail=f"요청이 너무 빠릅니다. {remaining}초 후 다시 시도해 주세요.")
-    _last_chatbot_time = current_time
+    with _RATE_LIMIT_LOCK:
+        if current_time - _last_chatbot_time < CHATBOT_RATE_LIMIT_SECONDS:
+            remaining = CHATBOT_RATE_LIMIT_SECONDS - (current_time - _last_chatbot_time)
+            return rate_limit_response(remaining, f"요청이 너무 빠릅니다. {round(remaining, 1)}초 후 다시 시도해 주세요.")
+        _last_chatbot_time = current_time
 
     # Retrieve recent articles with summaries (last 7 days for broader context)
     cutoff = datetime.now(timezone.utc) - timedelta(days=7)

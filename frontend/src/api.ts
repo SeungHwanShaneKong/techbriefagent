@@ -8,6 +8,9 @@ import type {
   StatsResponse,
 } from "./types";
 
+// ── Patch ID: FIX-429-RATE-LIMIT-20260307-153842 ──
+// Timestamp: 2026-03-07T15:38:42Z
+
 // 프로덕션: "" (Vercel rewrites / 같은 origin)
 // 로컬 개발: Vite proxy가 /api/* → localhost:8000 으로 포워딩
 // Docker: VITE_API_BASE_URL=http://backend:8000 (빌드 시 주입)
@@ -18,33 +21,62 @@ const api = axios.create({
   timeout: 60000,
 });
 
-// Retry configuration
-const MAX_RETRIES = 2;
+// Retry configuration - 429 포함 재시도
+const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 1000;
+const MAX_429_RETRIES = 4;
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Parse Retry-After header (seconds or HTTP-date).
+ * Returns delay in ms, or null if header is absent/unparseable.
+ */
+function parseRetryAfter(response: { headers?: Record<string, string> }): number | null {
+  const header = response?.headers?.["retry-after"];
+  if (!header) return null;
+  const seconds = Number(header);
+  if (!isNaN(seconds) && seconds > 0) return seconds * 1000;
+  const date = Date.parse(header);
+  if (!isNaN(date)) return Math.max(date - Date.now(), 1000);
+  return null;
 }
 
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
     const config = error.config;
-    if (!config || config._retryCount >= MAX_RETRIES) {
-      return Promise.reject(error);
+    if (!config) return Promise.reject(error);
+
+    const status = error.response?.status;
+    config._retryCount = config._retryCount || 0;
+
+    // 429 Rate Limit: exponential backoff with Retry-After support
+    if (status === 429) {
+      config._429RetryCount = (config._429RetryCount || 0) + 1;
+      if (config._429RetryCount > MAX_429_RETRIES) {
+        return Promise.reject(error);
+      }
+      const retryAfterMs = parseRetryAfter(error.response);
+      const backoffMs = retryAfterMs ?? Math.min(1000 * Math.pow(2, config._429RetryCount), 16000);
+      await sleep(backoffMs);
+      return api(config);
     }
 
+    // Server errors (5xx), network errors: standard retry
     const isRetryable =
       !error.response ||
       error.code === "ECONNABORTED" ||
       error.code === "ERR_NETWORK" ||
-      (error.response && error.response.status >= 500);
+      (status && status >= 500);
 
-    if (!isRetryable) {
+    if (!isRetryable || config._retryCount >= MAX_RETRIES) {
       return Promise.reject(error);
     }
 
-    config._retryCount = (config._retryCount || 0) + 1;
+    config._retryCount += 1;
     const delay = RETRY_DELAY_MS * config._retryCount;
     await sleep(delay);
     return api(config);

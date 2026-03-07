@@ -139,9 +139,18 @@ export default function App() {
     [dailyBrief.category_reports]
   );
 
+  // ── Patch ID: FIX-429-RATE-LIMIT-20260307-153842 ──
+  // Timestamp: 2026-03-07T15:38:42Z
+
   /* ── data fetching ── */
-  const loadCore = useCallback(async () => {
-    const [statsData, statusData, datesData] = await Promise.all([fetchStats(), fetchCrawlStatus(), fetchNewsDates(180)]);
+  const dateViewInFlight = useRef<boolean>(false);
+
+  const loadCore = useCallback(async (signal?: AbortSignal) => {
+    const [statsData, statusData, datesData] = await Promise.all([
+      fetchStats(signal),
+      fetchCrawlStatus(signal),
+      fetchNewsDates(180, signal),
+    ]);
     setStats(statsData);
     setCrawlStatus(statusData);
     setNewsDates(datesData);
@@ -151,13 +160,33 @@ export default function App() {
   }, [selectedDate]);
 
   const loadDateViews = useCallback(async (signal?: AbortSignal) => {
-    const [briefData, articleData] = await Promise.all([
-      fetchDailyBrief(selectedDate, signal),
-      fetchNews({ targetDate: selectedDate, category: selectedCategory, keyword, limit: 180, signal }),
-    ]);
-    setDailyBrief(briefData);
-    setArticles(articleData.items);
+    // Prevent concurrent duplicate calls to daily-brief (429 trigger)
+    if (dateViewInFlight.current) return;
+    dateViewInFlight.current = true;
+    try {
+      const [briefData, articleData] = await Promise.all([
+        fetchDailyBrief(selectedDate, signal),
+        fetchNews({ targetDate: selectedDate, category: selectedCategory, keyword, limit: 180, signal }),
+      ]);
+      setDailyBrief(briefData);
+      setArticles(articleData.items);
+    } finally {
+      dateViewInFlight.current = false;
+    }
   }, [selectedDate, selectedCategory, keyword]);
+
+  /** Format user-facing error from Axios or generic errors */
+  const formatError = useCallback((err: unknown): string => {
+    if (!err) return "알 수 없는 오류";
+    const axiosErr = err as { response?: { status?: number }; code?: string; message?: string };
+    const status = axiosErr.response?.status;
+    if (status === 429) return "서버 요청 한도 초과 – 잠시 후 자동 재시도합니다.";
+    if (status === 503 || status === 502) return "API 서버에 연결할 수 없습니다. 서버 상태를 확인해 주세요.";
+    if (status && status >= 500) return `서버 내부 오류 (${status}). 잠시 후 다시 시도해 주세요.`;
+    if (axiosErr.code === "ECONNABORTED") return "요청 시간 초과 – 네트워크 상태를 확인해 주세요.";
+    if (axiosErr.code === "ERR_NETWORK") return "네트워크 연결 실패 – API 서버가 작동 중인지 확인해 주세요.";
+    return String(err);
+  }, []);
 
   const loadAll = useCallback(async () => {
     try {
@@ -165,12 +194,13 @@ export default function App() {
       await loadCore();
       await loadDateViews();
     } catch (loadError) {
-      setError(`데이터 로딩 실패: ${String(loadError)}`);
+      const msg = formatError(loadError);
+      setError(`데이터 로딩 실패: ${msg}`);
     } finally {
       setLoading(false);
       setLastRefreshed(dayjs().format("HH:mm:ss"));
     }
-  }, [loadCore, loadDateViews]);
+  }, [loadCore, loadDateViews, formatError]);
 
   const silentRefresh = useCallback(async () => {
     if (refreshInFlight.current) return;
@@ -180,7 +210,7 @@ export default function App() {
       await loadDateViews();
       setLastRefreshed(dayjs().format("HH:mm:ss"));
     } catch {
-      /* swallow */
+      /* swallow – silent refresh should not disturb user */
     } finally {
       refreshInFlight.current = false;
     }
@@ -188,9 +218,17 @@ export default function App() {
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
+  const initialLoadDone = useRef<boolean>(false);
   useEffect(() => {
     if (prevDateRef.current !== selectedDate) {
       prevDateRef.current = selectedDate;
+
+      // Skip if this is the very first render – loadAll already handles it
+      if (!initialLoadDone.current) {
+        initialLoadDone.current = true;
+        return;
+      }
+
       setDailyBrief(defaultDailyBrief(selectedDate));
       setVisibleCount(ARTICLES_PER_PAGE);
       setExpandedArticles(new Set());
@@ -204,12 +242,12 @@ export default function App() {
       loadDateViews(controller.signal)
         .catch((err) => {
           if (err?.name !== "AbortError" && err?.code !== "ERR_CANCELED") {
-            console.error("loadDateViews error:", err);
+            setError(`날짜 데이터 로딩 실패: ${formatError(err)}`);
           }
         })
         .finally(() => setDateLoading(false));
     }
-  }, [loadDateViews, selectedDate]);
+  }, [loadDateViews, selectedDate, formatError]);
 
   useEffect(() => {
     const prev = prevRunningRef.current;
@@ -250,7 +288,7 @@ export default function App() {
       showToast(response.status);
       await loadCore();
     } catch (e) {
-      setError(`수집 실행 실패: ${String(e)}`);
+      setError(`수집 실행 실패: ${formatError(e)}`);
     } finally {
       setWorking(false);
     }
@@ -264,7 +302,7 @@ export default function App() {
       showToast(response.status);
       await loadCore();
     } catch (e) {
-      setError(`분석 보정 실행 실패: ${String(e)}`);
+      setError(`분석 보정 실행 실패: ${formatError(e)}`);
     } finally {
       setWorking(false);
     }
