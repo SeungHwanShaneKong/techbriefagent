@@ -9,14 +9,19 @@ load_dotenv()
 # Use SQLite for simplicity as requested
 SQLALCHEMY_DATABASE_URL = os.getenv("DB_URL", "sqlite:///./tech_news.db")
 
+_is_sqlite = SQLALCHEMY_DATABASE_URL.startswith("sqlite")
+
 # check_same_thread is needed for SQLite
+_connect_args = {"check_same_thread": False} if _is_sqlite else {}
 engine = create_engine(
-    SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False},
+    SQLALCHEMY_DATABASE_URL, connect_args=_connect_args,
     pool_pre_ping=True,
 )
 
 @event.listens_for(engine, "connect")
 def set_sqlite_pragma(dbapi_connection, connection_record):
+    if not _is_sqlite:
+        return
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
     cursor.execute("PRAGMA synchronous=NORMAL")

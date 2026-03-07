@@ -68,13 +68,17 @@ app = FastAPI(
     version="1.0.0"
 )
 
-_cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
+_cors_default = (
+    "http://localhost:5173,http://127.0.0.1:5173,"
+    "http://localhost:8501,http://127.0.0.1:8501"
+)
+_cors_origins = os.getenv("CORS_ORIGINS", _cors_default)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[o.strip() for o in _cors_origins.split(",") if o.strip()],
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Content-Type", "Authorization", "X-Request-ID"],
 )
 
 @app.middleware("http")
@@ -251,7 +255,7 @@ def get_env_float(name: str, default: float) -> float:
 @app.post("/api/crawl", response_model=schemas.CrawlerResponse)
 async def trigger_crawling(
     background_tasks: BackgroundTasks,
-    min_articles: int = Query(default=100, ge=1, le=5000),
+    min_articles: int = Query(default=30, ge=1, le=5000),
 ):
     """
     Trigger crawling in the background and keep retrying until minimum article target is met.

@@ -3,13 +3,15 @@ import type {
   CrawlStatusResponse,
   CrawlerResponse,
   DailyBriefResponse,
-  NewsArticle,
   NewsDateInfo,
   PaginatedNewsResponse,
   StatsResponse,
 } from "./types";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
+// 프로덕션: "" (Vercel rewrites / 같은 origin)
+// 로컬 개발: Vite proxy가 /api/* → localhost:8000 으로 포워딩
+// Docker: VITE_API_BASE_URL=http://backend:8000 (빌드 시 주입)
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
 
 const api = axios.create({
   baseURL: API_BASE_URL,

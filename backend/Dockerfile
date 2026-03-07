@@ -14,7 +14,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN playwright install --with-deps chromium
 
 COPY backend /app/backend
-RUN touch /app/tech_news.db
+
+# Create default DB file and data directory for Render persistent disk
+RUN mkdir -p /app/data && touch /app/tech_news.db && touch /app/data/tech_news.db
 
 RUN useradd --create-home appuser && chown -R appuser:appuser /app
 USER appuser

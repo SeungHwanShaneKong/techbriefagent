@@ -27,25 +27,27 @@ def setup_logging(level: Optional[str] = None) -> logging.Logger:
     console_handler.setLevel(numeric_level)
     console_handler.setFormatter(formatter)
 
-    # File handler with rotation
-    log_file = os.getenv("LOG_FILE", "logs/technews.log")
-    log_dir = os.path.dirname(log_file)
-    if log_dir:
-        os.makedirs(log_dir, exist_ok=True)
-
-    file_handler = RotatingFileHandler(
-        log_file, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
-    )
-    file_handler.setLevel(numeric_level)
-    file_handler.setFormatter(formatter)
-
     # Root app logger
     app_logger = logging.getLogger("technews")
     app_logger.setLevel(numeric_level)
     # Avoid duplicate handlers on reload
     if not app_logger.handlers:
         app_logger.addHandler(console_handler)
-        app_logger.addHandler(file_handler)
+
+        # File handler with rotation (graceful fallback if dir not writable)
+        log_file = os.getenv("LOG_FILE", "logs/technews.log")
+        log_dir = os.path.dirname(log_file)
+        try:
+            if log_dir:
+                os.makedirs(log_dir, exist_ok=True)
+            file_handler = RotatingFileHandler(
+                log_file, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
+            )
+            file_handler.setLevel(numeric_level)
+            file_handler.setFormatter(formatter)
+            app_logger.addHandler(file_handler)
+        except (OSError, PermissionError):
+            app_logger.warning("파일 로깅 비활성화: %s 쓰기 불가", log_file)
 
     # Quiet noisy third-party loggers
     for noisy in ("httpx", "httpcore", "urllib3", "asyncio"):

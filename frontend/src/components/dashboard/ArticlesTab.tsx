@@ -13,7 +13,7 @@ interface ArticlesTabProps {
   visibleCount: number;
   expandedArticles: Set<number>;
   setExpandedArticles: React.Dispatch<React.SetStateAction<Set<number>>>;
-  sentinelRef: React.RefObject<HTMLDivElement | null>;
+  sentinelRef: React.RefObject<HTMLDivElement>;
   setSearchKeyword: (kw: string) => void;
   showToast: (msg: string) => void;
 }

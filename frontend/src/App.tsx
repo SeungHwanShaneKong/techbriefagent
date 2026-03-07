@@ -61,7 +61,7 @@ export default function App() {
   const [selectedDate, setSelectedDate] = useState<string>(dayjs().format("YYYY-MM-DD"));
   const [selectedCategory, setSelectedCategory] = useState<string>("All");
   const [keyword, setKeyword] = useState<string>("");
-  const [minArticles, setMinArticles] = useState<number>(120);
+  const [minArticles, setMinArticles] = useState<number>(30);
   const [dailyBrief, setDailyBrief] = useState<DailyBriefResponse>(defaultDailyBrief(dayjs().format("YYYY-MM-DD")));
   const [articles, setArticles] = useState<NewsArticle[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -104,7 +104,7 @@ export default function App() {
   }
 
   /* ── UX#1: Infinite scroll sentinel ── */
-  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
 
   /* ── derived data ── */
   const keywordTrend = useMemo(() => {
