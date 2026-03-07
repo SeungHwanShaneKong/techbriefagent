@@ -15,8 +15,8 @@ const CategoryBarChart = React.memo(function CategoryBarChart({ data }: Category
           <BarChart3 className="h-4 w-4 text-primary" /> 카테고리 분포 (48시간)
         </CardTitle>
       </CardHeader>
-      <CardContent className="h-72">
-        <ResponsiveContainer width="100%" height="100%">
+      <CardContent className="h-72 min-h-[200px]">
+        <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
           <BarChart data={data}>
             <CartesianGrid strokeDasharray="3 3" stroke="#E5E5EA" />
             <XAxis

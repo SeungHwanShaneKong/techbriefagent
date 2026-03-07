@@ -254,6 +254,10 @@ def parse_target_date(target_date: str) -> date:
     except ValueError:
         raise HTTPException(status_code=400, detail="target_date must be YYYY-MM-DD format")
 
+def _max_allowed_date() -> date:
+    """Allow today + 1 day tolerance for timezone differences (e.g. KST vs UTC)."""
+    return date.today() + timedelta(days=1)
+
 def get_day_window(target_day: date) -> tuple[datetime, datetime]:
     start = datetime.combine(target_day, datetime.min.time())
     end = start + timedelta(days=1)
@@ -436,7 +440,7 @@ async def get_daily_brief(
         _last_brief_time = current_time
 
     target_day = parse_target_date(target_date)
-    if target_day > date.today():
+    if target_day > _max_allowed_date():
         raise HTTPException(status_code=400, detail="미래 날짜는 조회할 수 없습니다.")
     day_start, day_end = get_day_window(target_day)
 

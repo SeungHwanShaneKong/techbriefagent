@@ -15,8 +15,8 @@ const CostAreaChart = React.memo(function CostAreaChart({ data }: CostAreaChartP
           <DollarSign className="h-4 w-4 text-primary" /> 비용 추이 (USD)
         </CardTitle>
       </CardHeader>
-      <CardContent className="h-72">
-        <ResponsiveContainer width="100%" height="100%">
+      <CardContent className="h-72 min-h-[200px]">
+        <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
           <AreaChart data={data}>
             <defs>
               <linearGradient id="costGradient" x1="0" y1="0" x2="0" y2="1">

@@ -139,47 +139,19 @@ export default function App() {
     [dailyBrief.category_reports]
   );
 
-  // ── Patch ID: FIX-429-RATE-LIMIT-20260307-153842 ──
-  // Timestamp: 2026-03-07T15:38:42Z
+  // ── Patch ID: FIX-429-DATEVIEW-RECHARTS-20260307-163215 ──
+  // Timestamp: 2026-03-07T16:32:15Z
 
   /* ── data fetching ── */
   const dateViewInFlight = useRef<boolean>(false);
-
-  const loadCore = useCallback(async (signal?: AbortSignal) => {
-    const [statsData, statusData, datesData] = await Promise.all([
-      fetchStats(signal),
-      fetchCrawlStatus(signal),
-      fetchNewsDates(180, signal),
-    ]);
-    setStats(statsData);
-    setCrawlStatus(statusData);
-    setNewsDates(datesData);
-    if (datesData.length > 0 && !datesData.some((x) => x.date === selectedDate)) {
-      setSelectedDate(datesData[0].date);
-    }
-  }, [selectedDate]);
-
-  const loadDateViews = useCallback(async (signal?: AbortSignal) => {
-    // Prevent concurrent duplicate calls to daily-brief (429 trigger)
-    if (dateViewInFlight.current) return;
-    dateViewInFlight.current = true;
-    try {
-      const [briefData, articleData] = await Promise.all([
-        fetchDailyBrief(selectedDate, signal),
-        fetchNews({ targetDate: selectedDate, category: selectedCategory, keyword, limit: 180, signal }),
-      ]);
-      setDailyBrief(briefData);
-      setArticles(articleData.items);
-    } finally {
-      dateViewInFlight.current = false;
-    }
-  }, [selectedDate, selectedCategory, keyword]);
+  const mountedRef = useRef<boolean>(false);
 
   /** Format user-facing error from Axios or generic errors */
   const formatError = useCallback((err: unknown): string => {
     if (!err) return "알 수 없는 오류";
-    const axiosErr = err as { response?: { status?: number }; code?: string; message?: string };
+    const axiosErr = err as { response?: { status?: number; data?: { detail?: string } }; code?: string; message?: string };
     const status = axiosErr.response?.status;
+    if (status === 400) return axiosErr.response?.data?.detail || "잘못된 요청입니다.";
     if (status === 429) return "서버 요청 한도 초과 – 잠시 후 자동 재시도합니다.";
     if (status === 503 || status === 502) return "API 서버에 연결할 수 없습니다. 서버 상태를 확인해 주세요.";
     if (status && status >= 500) return `서버 내부 오류 (${status}). 잠시 후 다시 시도해 주세요.`;
@@ -188,11 +160,53 @@ export default function App() {
     return String(err);
   }, []);
 
+  /**
+   * loadDateViewsFor – fetch daily-brief + news for a specific date.
+   * Uses dateViewInFlight guard to prevent concurrent duplicate calls.
+   */
+  const loadDateViewsFor = useCallback(async (targetDate: string, signal?: AbortSignal) => {
+    if (dateViewInFlight.current) return;
+    dateViewInFlight.current = true;
+    try {
+      const [briefData, articleData] = await Promise.all([
+        fetchDailyBrief(targetDate, signal),
+        fetchNews({ targetDate, category: selectedCategory, keyword, limit: 180, signal }),
+      ]);
+      setDailyBrief(briefData);
+      setArticles(articleData.items);
+    } finally {
+      dateViewInFlight.current = false;
+    }
+  }, [selectedCategory, keyword]);
+
+  /**
+   * loadAll – initial data load. Runs ONCE on mount.
+   * Fetches core stats first, resolves the best date, then fetches date-specific views.
+   */
   const loadAll = useCallback(async () => {
     try {
       setError("");
-      await loadCore();
-      await loadDateViews();
+      const [statsData, statusData, datesData] = await Promise.all([
+        fetchStats(),
+        fetchCrawlStatus(),
+        fetchNewsDates(180),
+      ]);
+      setStats(statsData);
+      setCrawlStatus(statusData);
+      setNewsDates(datesData);
+
+      // Resolve best date: prefer current selectedDate if it exists in the list,
+      // otherwise use the first available date.
+      let resolvedDate = selectedDate;
+      if (datesData.length > 0 && !datesData.some((x) => x.date === resolvedDate)) {
+        resolvedDate = datesData[0].date;
+        setSelectedDate(resolvedDate);
+      }
+      // Guard: skip daily-brief if no valid date
+      if (resolvedDate) {
+        prevDateRef.current = resolvedDate;
+        await loadDateViewsFor(resolvedDate);
+      }
     } catch (loadError) {
       const msg = formatError(loadError);
       setError(`데이터 로딩 실패: ${msg}`);
@@ -200,54 +214,67 @@ export default function App() {
       setLoading(false);
       setLastRefreshed(dayjs().format("HH:mm:ss"));
     }
-  }, [loadCore, loadDateViews, formatError]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const silentRefresh = useCallback(async () => {
     if (refreshInFlight.current) return;
     refreshInFlight.current = true;
     try {
-      await loadCore();
-      await loadDateViews();
+      const [statsData, statusData, datesData] = await Promise.all([
+        fetchStats(),
+        fetchCrawlStatus(),
+        fetchNewsDates(180),
+      ]);
+      setStats(statsData);
+      setCrawlStatus(statusData);
+      setNewsDates(datesData);
+
+      // Re-fetch date views with current prevDateRef (stable reference)
+      const curDate = prevDateRef.current;
+      if (curDate) {
+        await loadDateViewsFor(curDate);
+      }
       setLastRefreshed(dayjs().format("HH:mm:ss"));
     } catch {
       /* swallow – silent refresh should not disturb user */
     } finally {
       refreshInFlight.current = false;
     }
-  }, [loadCore, loadDateViews]);
+  }, [loadDateViewsFor]);
 
-  useEffect(() => { loadAll(); }, [loadAll]);
-
-  const initialLoadDone = useRef<boolean>(false);
+  // Run once on mount
   useEffect(() => {
-    if (prevDateRef.current !== selectedDate) {
-      prevDateRef.current = selectedDate;
-
-      // Skip if this is the very first render – loadAll already handles it
-      if (!initialLoadDone.current) {
-        initialLoadDone.current = true;
-        return;
-      }
-
-      setDailyBrief(defaultDailyBrief(selectedDate));
-      setVisibleCount(ARTICLES_PER_PAGE);
-      setExpandedArticles(new Set());
-      setDateLoading(true);
-
-      // Cancel previous in-flight request
-      if (abortRef.current) abortRef.current.abort();
-      const controller = new AbortController();
-      abortRef.current = controller;
-
-      loadDateViews(controller.signal)
-        .catch((err) => {
-          if (err?.name !== "AbortError" && err?.code !== "ERR_CANCELED") {
-            setError(`날짜 데이터 로딩 실패: ${formatError(err)}`);
-          }
-        })
-        .finally(() => setDateLoading(false));
+    if (!mountedRef.current) {
+      mountedRef.current = true;
+      loadAll();
     }
-  }, [loadDateViews, selectedDate, formatError]);
+  }, [loadAll]);
+
+  // Date change – only fires for USER-initiated date changes (after mount)
+  useEffect(() => {
+    if (!mountedRef.current) return;
+    if (prevDateRef.current === selectedDate) return;
+    prevDateRef.current = selectedDate;
+
+    setDailyBrief(defaultDailyBrief(selectedDate));
+    setVisibleCount(ARTICLES_PER_PAGE);
+    setExpandedArticles(new Set());
+    setDateLoading(true);
+
+    // Cancel previous in-flight request
+    if (abortRef.current) abortRef.current.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    loadDateViewsFor(selectedDate, controller.signal)
+      .catch((err) => {
+        if (err?.name !== "AbortError" && err?.code !== "ERR_CANCELED") {
+          setError(`날짜 데이터 로딩 실패: ${formatError(err)}`);
+        }
+      })
+      .finally(() => setDateLoading(false));
+  }, [selectedDate, loadDateViewsFor, formatError]);
 
   useEffect(() => {
     const prev = prevRunningRef.current;
@@ -286,7 +313,9 @@ export default function App() {
       const response = await triggerCrawl(minArticles);
       setError("");
       showToast(response.status);
-      await loadCore();
+      const [statsData, statusData] = await Promise.all([fetchStats(), fetchCrawlStatus()]);
+      setStats(statsData);
+      setCrawlStatus(statusData);
     } catch (e) {
       setError(`수집 실행 실패: ${formatError(e)}`);
     } finally {
@@ -300,7 +329,9 @@ export default function App() {
       const response = await triggerRepair();
       setError("");
       showToast(response.status);
-      await loadCore();
+      const [statsData, statusData] = await Promise.all([fetchStats(), fetchCrawlStatus()]);
+      setStats(statsData);
+      setCrawlStatus(statusData);
     } catch (e) {
       setError(`분석 보정 실행 실패: ${formatError(e)}`);
     } finally {
