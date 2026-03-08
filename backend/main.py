@@ -30,6 +30,8 @@ import asyncio as _asyncio
 import time
 import uuid
 
+# ── Patch ID: TEAM-MECE-FULLFIX-20260308-032800 ──
+# Timestamp: 2026-03-08T03:28:00Z
 # ── Patch ID: FIX-429-RATE-LIMIT-20260307-153842 ──
 # Timestamp: 2026-03-07T15:38:42Z
 DAILY_BRIEF_CACHE: Dict[str, Dict[str, Any]] = {}
@@ -89,10 +91,14 @@ _cors_default = (
     "http://localhost:8501,http://127.0.0.1:8501"
 )
 _cors_origins = os.getenv("CORS_ORIGINS", _cors_default)
+_parsed_origins = [o.strip() for o in _cors_origins.split(",") if o.strip()]
+# CORS spec: allow_credentials=True is incompatible with wildcard "*" origins.
+# When wildcard is configured, disable credentials to avoid browser CORS blocks.
+_has_wildcard = "*" in _parsed_origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[o.strip() for o in _cors_origins.split(",") if o.strip()],
-    allow_credentials=True,
+    allow_origins=_parsed_origins,
+    allow_credentials=not _has_wildcard,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "X-Request-ID"],
 )
@@ -259,9 +265,14 @@ def _max_allowed_date() -> date:
     return date.today() + timedelta(days=1)
 
 def get_day_window(target_day: date) -> tuple[datetime, datetime]:
+    # Use timezone-naive datetimes to match SQLite storage (pub_date stored as naive UTC).
+    # SQLite doesn't support timezone-aware comparisons, so both sides must be naive.
     start = datetime.combine(target_day, datetime.min.time())
     end = start + timedelta(days=1)
     return start, end
+
+
+_429_RATE_LIMITED_DESC = {"description": "Rate limited – Retry-After header included"}
 
 def get_env_float(name: str, default: float) -> float:
     value = os.getenv(name)
@@ -272,7 +283,7 @@ def get_env_float(name: str, default: float) -> float:
     except ValueError:
         return default
 
-@app.post("/api/crawl", response_model=schemas.CrawlerResponse)
+@app.post("/api/crawl", response_model=schemas.CrawlerResponse, responses={429: _429_RATE_LIMITED_DESC})
 async def trigger_crawling(
     background_tasks: BackgroundTasks,
     min_articles: int = Query(default=30, ge=1, le=5000),
@@ -423,7 +434,7 @@ def get_news_dates(
         if row[0] is not None
     ]
 
-@app.get("/api/daily-brief", response_model=schemas.DailyBriefResponse)
+@app.get("/api/daily-brief", response_model=schemas.DailyBriefResponse, responses={429: _429_RATE_LIMITED_DESC})
 async def get_daily_brief(
     target_date: str = Query(..., description="YYYY-MM-DD"),
     db: Session = Depends(get_db),
@@ -651,7 +662,7 @@ def get_stats(db: Session = Depends(get_db)):
     }
 
 
-@app.post("/api/chatbot", response_model=schemas.ChatbotResponse)
+@app.post("/api/chatbot", response_model=schemas.ChatbotResponse, responses={429: _429_RATE_LIMITED_DESC})
 async def chatbot_query(
     body: schemas.ChatbotRequest,
     db: Session = Depends(get_db),

@@ -139,12 +139,18 @@ export default function App() {
     [dailyBrief.category_reports]
   );
 
-  // ── Patch ID: FIX-429-DATEVIEW-RECHARTS-20260307-163215 ──
-  // Timestamp: 2026-03-07T16:32:15Z
+  // ── Patch ID: TEAM-MECE-FULLFIX-20260308-032800 ──
+  // Timestamp: 2026-03-08T03:28:00Z
 
   /* ── data fetching ── */
   const dateViewInFlight = useRef<boolean>(false);
   const mountedRef = useRef<boolean>(false);
+
+  // Refs to hold latest filter values – avoids stale closures in loadAll/silentRefresh
+  const categoryRef = useRef(selectedCategory);
+  const keywordRef = useRef(keyword);
+  categoryRef.current = selectedCategory;
+  keywordRef.current = keyword;
 
   /** Format user-facing error from Axios or generic errors */
   const formatError = useCallback((err: unknown): string => {
@@ -162,6 +168,7 @@ export default function App() {
 
   /**
    * loadDateViewsFor – fetch daily-brief + news for a specific date.
+   * Reads category/keyword from refs to always use latest values.
    * Uses dateViewInFlight guard to prevent concurrent duplicate calls.
    */
   const loadDateViewsFor = useCallback(async (targetDate: string, signal?: AbortSignal) => {
@@ -170,14 +177,14 @@ export default function App() {
     try {
       const [briefData, articleData] = await Promise.all([
         fetchDailyBrief(targetDate, signal),
-        fetchNews({ targetDate, category: selectedCategory, keyword, limit: 180, signal }),
+        fetchNews({ targetDate, category: categoryRef.current, keyword: keywordRef.current, limit: 180, signal }),
       ]);
       setDailyBrief(briefData);
       setArticles(articleData.items);
     } finally {
       dateViewInFlight.current = false;
     }
-  }, [selectedCategory, keyword]);
+  }, []);
 
   /**
    * loadAll – initial data load. Runs ONCE on mount.
@@ -195,14 +202,12 @@ export default function App() {
       setCrawlStatus(statusData);
       setNewsDates(datesData);
 
-      // Resolve best date: prefer current selectedDate if it exists in the list,
-      // otherwise use the first available date.
-      let resolvedDate = selectedDate;
+      // Resolve best date from refs (avoids stale closure)
+      let resolvedDate = prevDateRef.current || dayjs().format("YYYY-MM-DD");
       if (datesData.length > 0 && !datesData.some((x) => x.date === resolvedDate)) {
         resolvedDate = datesData[0].date;
         setSelectedDate(resolvedDate);
       }
-      // Guard: skip daily-brief if no valid date
       if (resolvedDate) {
         prevDateRef.current = resolvedDate;
         await loadDateViewsFor(resolvedDate);
@@ -214,8 +219,7 @@ export default function App() {
       setLoading(false);
       setLastRefreshed(dayjs().format("HH:mm:ss"));
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [loadDateViewsFor, formatError]);
 
   const silentRefresh = useCallback(async () => {
     if (refreshInFlight.current) return;
@@ -230,7 +234,7 @@ export default function App() {
       setCrawlStatus(statusData);
       setNewsDates(datesData);
 
-      // Re-fetch date views with current prevDateRef (stable reference)
+      // Re-fetch date views using refs (always latest values)
       const curDate = prevDateRef.current;
       if (curDate) {
         await loadDateViewsFor(curDate);

@@ -29,7 +29,7 @@ services:
       - key: DB_URL
         value: sqlite:////app/data/tech_news.db
       - key: CORS_ORIGINS
-        value: "*"
+        value: "https://techbriefagent.vercel.app,https://tech-news-backend.onrender.com,http://localhost:5173,http://localhost:8501"
       - key: LOG_LEVEL
         value: INFO
       - key: USD_TO_KRW_RATE
