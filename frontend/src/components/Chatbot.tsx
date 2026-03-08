@@ -33,6 +33,9 @@ export default function Chatbot() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const msgIdRef = useRef(1);
+  // F4: Ref to access latest messages without stale closure
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
 
   // Auto-scroll to bottom when messages change
   useEffect(() => {
@@ -65,8 +68,8 @@ export default function Chatbot() {
     setSending(true);
 
     try {
-      // Build history from previous messages (exclude loading)
-      const history: ChatMessage[] = messages
+      // F4: Read from ref to always get latest messages (avoid stale closure)
+      const history: ChatMessage[] = messagesRef.current
         .filter((m) => !m.isLoading)
         .map((m) => ({ role: m.role, content: m.content }));
 
@@ -101,7 +104,7 @@ export default function Chatbot() {
     } finally {
       setSending(false);
     }
-  }, [input, sending, messages]);
+  }, [input, sending]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {

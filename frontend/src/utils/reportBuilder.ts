@@ -75,7 +75,7 @@ export function buildReportHTML(
   const catReportsHTML = (dailyBrief.category_reports || [])
     .map(
       (r) =>
-        `<tr><td><strong>${esc(categoryLabel(r.category))}</strong></td><td>${r.article_count}건</td><td>${r.average_sentiment.toFixed(1)}/100</td><td>${esc(r.executive_summary)}</td><td>${r.key_topics.map((t) => esc(t)).join(", ")}</td></tr>`
+        `<tr><td><strong>${esc(categoryLabel(r.category))}</strong></td><td>${r.article_count}건</td><td>${r.average_sentiment.toFixed(1)}/100</td><td>${esc(r.executive_summary)}</td><td>${(r.key_topics || []).map((t) => esc(t)).join(", ")}</td></tr>`
     )
     .join("");
 

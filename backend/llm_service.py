@@ -156,8 +156,13 @@ def normalize_categorized_summary(raw: Any) -> List[Dict[str, Any]]:
             if isinstance(item, dict):
                 cat = str(item.get("category", "")).strip()
                 bullets_raw = item.get("bullets", [])
+                # B3: Guard against None or unexpected types from LLM response
+                if bullets_raw is None:
+                    bullets_raw = []
                 if isinstance(bullets_raw, str):
                     bullets_raw = [b.strip() for b in bullets_raw.split("\n") if b.strip()]
+                if not isinstance(bullets_raw, list):
+                    bullets_raw = []
                 bullets = [str(b).strip() for b in bullets_raw if str(b).strip()][:2]
                 while len(bullets) < 2:
                     bullets.append("추가 분석 데이터를 수집 중입니다.")

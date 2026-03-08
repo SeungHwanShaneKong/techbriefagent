@@ -98,6 +98,13 @@ export default function App() {
     toastTimer.current = setTimeout(() => setToast(""), 2500);
   }
 
+  // F1: Cleanup toast timer on unmount to prevent memory leak
+  useEffect(() => {
+    return () => {
+      if (toastTimer.current) clearTimeout(toastTimer.current);
+    };
+  }, []);
+
   /** UX#5: Set keyword filter from any clickable keyword chip */
   function setSearchKeyword(kw: string) {
     setKeyword(kw);
@@ -308,10 +315,11 @@ export default function App() {
     );
     observer.observe(el);
     return () => observer.disconnect();
-  }, [articles.length]);
+  }, []); // F5: Stable observer – sentinel element is always mounted
 
   /* ── actions ── */
-  async function handleCrawlStart() {
+  // F2: Wrapped in useCallback to prevent unnecessary Sidebar re-renders
+  const handleCrawlStart = useCallback(async () => {
     setWorking(true);
     try {
       const response = await triggerCrawl(minArticles);
@@ -325,9 +333,9 @@ export default function App() {
     } finally {
       setWorking(false);
     }
-  }
+  }, [minArticles, formatError]);
 
-  async function handleRepair() {
+  const handleRepair = useCallback(async () => {
     setWorking(true);
     try {
       const response = await triggerRepair();
@@ -341,7 +349,7 @@ export default function App() {
     } finally {
       setWorking(false);
     }
-  }
+  }, [formatError]);
 
   /* ═══════════════════════════════════════════════════════════════════
      Loading State

@@ -1,7 +1,6 @@
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 import os
-from threading import Lock
 from typing import Any, Dict, List, Optional
 
 from pathlib import Path as _Path
@@ -30,13 +29,13 @@ import asyncio as _asyncio
 import time
 import uuid
 
-# ── Patch ID: TEAM-MECE-FULLFIX-20260308-032800 ──
-# Timestamp: 2026-03-08T03:28:00Z
+# ── Patch ID: MECE-FULLSYSTEM-20260308-154500 ──
+# Timestamp: 2026-03-08T15:45:00Z
 # ── Patch ID: FIX-429-RATE-LIMIT-20260307-153842 ──
 # Timestamp: 2026-03-07T15:38:42Z
 DAILY_BRIEF_CACHE: Dict[str, Dict[str, Any]] = {}
-CRAWL_JOB_LOCK = Lock()
-_RATE_LIMIT_LOCK = Lock()
+# B1: asyncio.Lock for async-safe rate limiting (replaces threading.Lock)
+_RATE_LIMIT_LOCK = _asyncio.Lock()
 _last_crawl_time: float = 0.0
 CRAWL_RATE_LIMIT_SECONDS = 30
 _last_chatbot_time: float = 0.0
@@ -112,13 +111,13 @@ async def add_request_id(request, call_next):
     return response
 
 def get_crawl_state_snapshot() -> Dict[str, Any]:
-    with CRAWL_JOB_LOCK:
-        return dict(CRAWL_JOB_STATE)
+    # B5: Lock-free read – dict shallow copy is atomic under CPython GIL
+    return dict(CRAWL_JOB_STATE)
 
 def update_crawl_state(**kwargs: Any) -> None:
-    with CRAWL_JOB_LOCK:
-        CRAWL_JOB_STATE.update(kwargs)
-        CRAWL_JOB_STATE["updated_at"] = datetime.now(timezone.utc).isoformat()
+    # B5: Direct dict update – atomic under CPython GIL, called from serialized crawler callbacks
+    CRAWL_JOB_STATE.update(kwargs)
+    CRAWL_JOB_STATE["updated_at"] = datetime.now(timezone.utc).isoformat()
 
 # Async helper to trigger crawler until minimum target is met
 async def run_crawler_task(min_articles: int):
@@ -239,13 +238,22 @@ async def run_crawler_task(min_articles: int):
             ),
         )
         _asyncio.ensure_future(broadcast_log("크롤링 및 분석 완료", "info"))
+    except _asyncio.CancelledError:
+        # B4: Graceful handling of task cancellation
+        update_crawl_state(
+            is_running=False,
+            current_phase="cancelled",
+            message="수집 작업이 취소되었습니다.",
+        )
+        logger.info("Crawler task was cancelled")
+        _asyncio.ensure_future(broadcast_log("크롤링 작업 취소됨", "warning"))
     except Exception as e:
         update_crawl_state(
             is_running=False,
             current_phase="error",
-            message=f"수집 작업 중 오류: {e}",
+            message=f"수집 작업 중 오류: {type(e).__name__}: {e}",
         )
-        logger.error("Error in crawler task: %s", e, exc_info=True)
+        logger.error("Error in crawler task (%s): %s", type(e).__name__, e, exc_info=True)
         _asyncio.ensure_future(broadcast_log(f"크롤링 오류: {e}", "error"))
     finally:
         db.close()
@@ -293,7 +301,7 @@ async def trigger_crawling(
     """
     global _last_crawl_time
     current_time = time.time()
-    with _RATE_LIMIT_LOCK:
+    async with _RATE_LIMIT_LOCK:
         if current_time - _last_crawl_time < CRAWL_RATE_LIMIT_SECONDS:
             remaining = CRAWL_RATE_LIMIT_SECONDS - (current_time - _last_crawl_time)
             return rate_limit_response(remaining, f"너무 빠른 요청입니다. {int(remaining)}초 후 다시 시도해 주세요.")
@@ -444,7 +452,7 @@ async def get_daily_brief(
     """
     global _last_brief_time
     current_time = time.time()
-    with _RATE_LIMIT_LOCK:
+    async with _RATE_LIMIT_LOCK:
         if current_time - _last_brief_time < BRIEF_RATE_LIMIT_SECONDS:
             remaining = BRIEF_RATE_LIMIT_SECONDS - (current_time - _last_brief_time)
             return rate_limit_response(remaining, f"요청이 너무 빠릅니다. {round(remaining, 1)}초 후 다시 시도해 주세요.")
@@ -677,7 +685,7 @@ async def chatbot_query(
 
     global _last_chatbot_time
     current_time = time.time()
-    with _RATE_LIMIT_LOCK:
+    async with _RATE_LIMIT_LOCK:
         if current_time - _last_chatbot_time < CHATBOT_RATE_LIMIT_SECONDS:
             remaining = CHATBOT_RATE_LIMIT_SECONDS - (current_time - _last_chatbot_time)
             return rate_limit_response(remaining, f"요청이 너무 빠릅니다. {round(remaining, 1)}초 후 다시 시도해 주세요.")
@@ -756,9 +764,16 @@ async def broadcast_log(message: str, level: str = "info"):
         _ws_clients.remove(ws)
 
 
+_MAX_WS_CLIENTS = 20  # B2: Limit concurrent WebSocket connections
+
 @app.websocket("/ws/logs")
 async def websocket_logs(websocket: WebSocket):
     """WebSocket endpoint for real-time log streaming."""
+    # B2: Reject if too many concurrent connections
+    if len(_ws_clients) >= _MAX_WS_CLIENTS:
+        await websocket.close(code=1013, reason="Too many connections")
+        ws_logger.warning("WebSocket rejected: max clients (%d) reached", _MAX_WS_CLIENTS)
+        return
     await websocket.accept()
     _ws_clients.append(websocket)
     ws_logger.info("WebSocket client connected (total: %d)", len(_ws_clients))
@@ -775,8 +790,11 @@ async def websocket_logs(websocket: WebSocket):
                     break
     except WebSocketDisconnect:
         ws_logger.info("WebSocket client disconnected")
+    except (ConnectionResetError, RuntimeError) as e:
+        # B4: Specific exception types for connection-level errors
+        ws_logger.info("WebSocket connection reset: %s", e)
     except Exception as e:
-        ws_logger.warning("WebSocket error: %s", e)
+        ws_logger.warning("WebSocket unexpected error (%s): %s", type(e).__name__, e)
     finally:
         if websocket in _ws_clients:
             _ws_clients.remove(websocket)
