@@ -188,4 +188,97 @@ export async function executeAgentTask(request: AgentExecuteRequest) {
   return data;
 }
 
+// ── Admin API ──
+export async function fetchAdminConfig() {
+  const { data } = await api.get<import("./types").AdminConfig>("/api/admin/config");
+  return data;
+}
+
+export async function updateAdminConfig(config: { crawl_rate_limit_seconds?: number; chatbot_rate_limit_seconds?: number; brief_rate_limit_seconds?: number }) {
+  const { data } = await api.put("/api/admin/config", config);
+  return data;
+}
+
+export async function fetchAdminFeeds() {
+  const { data } = await api.get<import("./types").FeedInfo[]>("/api/admin/feeds");
+  return data;
+}
+
+export async function addAdminFeed(name: string, url: string) {
+  const { data } = await api.post("/api/admin/feeds", { name, url });
+  return data;
+}
+
+export async function removeAdminFeed(feedName: string) {
+  const { data } = await api.delete(`/api/admin/feeds/${encodeURIComponent(feedName)}`);
+  return data;
+}
+
+export async function fetchAdminLogs(skip = 0, limit = 20) {
+  const { data } = await api.get<import("./types").AdminLogsResponse>("/api/admin/logs", { params: { skip, limit } });
+  return data;
+}
+
+// ── Search API ──
+export async function searchArticles(params: {
+  q: string;
+  category?: string;
+  sentiment_min?: number;
+  sentiment_max?: number;
+  date_from?: string;
+  date_to?: string;
+  publisher?: string;
+  sort_by?: string;
+  limit?: number;
+  offset?: number;
+}) {
+  const { data } = await api.get<import("./types").SearchResponse>("/api/search", { params });
+  return data;
+}
+
+// ── Bookmark API ──
+export async function addBookmark(articleId: number, note?: string) {
+  const { data } = await api.post("/api/bookmarks", { article_id: articleId, note });
+  return data;
+}
+
+export async function removeBookmark(bookmarkId: number) {
+  const { data } = await api.delete(`/api/bookmarks/${bookmarkId}`);
+  return data;
+}
+
+export async function removeBookmarkByArticle(articleId: number) {
+  const { data } = await api.delete(`/api/bookmarks/article/${articleId}`);
+  return data;
+}
+
+export async function fetchBookmarks() {
+  const { data } = await api.get<import("./types").BookmarkResponse[]>("/api/bookmarks");
+  return data;
+}
+
+export async function fetchBookmarkedIds() {
+  const { data } = await api.get<number[]>("/api/bookmarked-ids");
+  return data;
+}
+
+// ── Export API ──
+export function getExportUrl(format: "csv" | "json", targetDate?: string, category?: string) {
+  const params = new URLSearchParams({ format });
+  if (targetDate) params.set("target_date", targetDate);
+  if (category && category !== "All") params.set("category", category);
+  return `${API_BASE_URL}/api/export/articles?${params.toString()}`;
+}
+
+// ── Analytics API ──
+export async function fetchSentimentTrend(days = 7) {
+  const { data } = await api.get<import("./types").SentimentTrendResponse>("/api/analytics/sentiment-trend", { params: { days } });
+  return data;
+}
+
+export async function fetchCategoryComparison(days = 7) {
+  const { data } = await api.get<import("./types").CategoryComparisonResponse>("/api/analytics/category-comparison", { params: { days } });
+  return data;
+}
+
 export { API_BASE_URL };

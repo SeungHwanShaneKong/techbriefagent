@@ -23,7 +23,7 @@ const KeywordCloud = React.memo(function KeywordCloud({ keywords, onKeywordClick
             {keywords.slice(0, 10).map((item) => (
               <button
                 key={item.name}
-                className="inline-flex items-center gap-1.5 rounded-full bg-surface border border-border/60 px-3 py-1.5 text-sm text-text-primary transition-colors hover:bg-primary-light hover:text-primary hover:border-primary/30 cursor-pointer"
+                className="inline-flex items-center gap-1.5 rounded-full bg-surface dark:bg-gray-700 border border-border/60 dark:border-gray-600 px-3 py-1.5 text-sm text-text-primary dark:text-gray-200 transition-colors hover:bg-primary-light hover:text-primary hover:border-primary/30 cursor-pointer"
                 onClick={() => onKeywordClick(item.name)}
               >
                 {item.name}

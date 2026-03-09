@@ -175,3 +175,104 @@ export interface AgentTeamStatusResponse {
   progress: Array<{ task_id: string; message: string; timestamp: number }>;
   last_result?: Record<string, unknown> | null;
 }
+
+// ── Admin types ─────────────────────────────────────────────────────
+export interface FeedInfo {
+  name: string;
+  url: string;
+}
+
+export interface AdminConfig {
+  min_articles: number;
+  crawl_rate_limit_seconds: number;
+  chatbot_rate_limit_seconds: number;
+  brief_rate_limit_seconds: number;
+  current_model: string;
+  feeds: FeedInfo[];
+}
+
+export interface AdminLogEntry {
+  id: number;
+  model_name: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  estimated_cost_usd: number;
+  created_at: string;
+}
+
+export interface AdminLogsResponse {
+  items: AdminLogEntry[];
+  total: number;
+  skip: number;
+  limit: number;
+}
+
+// ── Search types ────────────────────────────────────────────────────
+export interface SearchResult {
+  id: number;
+  title: string;
+  original_url: string;
+  publisher: string;
+  pub_date: string;
+  category: string;
+  summary_text?: string | null;
+  keywords?: string | null;
+  sentiment_score?: number | null;
+  translated_title?: string | null;
+}
+
+export interface SearchResponse {
+  results: SearchResult[];
+  total: number;
+  query: string;
+}
+
+// ── Bookmark types ──────────────────────────────────────────────────
+export interface BookmarkResponse {
+  id: number;
+  article_id: number;
+  note?: string | null;
+  created_at: string;
+  article?: NewsArticle | null;
+}
+
+// ── Analytics types ─────────────────────────────────────────────────
+export interface SentimentTrendPoint {
+  date: string;
+  avg_sentiment: number;
+  article_count: number;
+}
+
+export interface SentimentTrendResponse {
+  days: number;
+  trend: SentimentTrendPoint[];
+  by_category: Record<string, SentimentTrendPoint[]>;
+}
+
+export interface CategoryComparisonItem {
+  category: string;
+  article_count: number;
+  avg_sentiment: number;
+  top_keywords: string[];
+}
+
+export interface CategoryComparisonResponse {
+  categories: CategoryComparisonItem[];
+}
+
+// ── Chatbot enhanced types ──────────────────────────────────────────
+export interface ChatSourceArticle {
+  id: number;
+  title: string;
+  original_url: string;
+}
+
+// ── Notification types ──────────────────────────────────────────────
+export interface Notification {
+  id: string;
+  type: "crawl_complete" | "agent_complete" | "error" | "info";
+  message: string;
+  timestamp: string;
+  read: boolean;
+}

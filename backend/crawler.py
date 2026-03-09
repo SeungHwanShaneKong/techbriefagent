@@ -24,7 +24,7 @@ from . import models
 from .llm_service import summarize_and_analyze, get_model_name
 from .logging_config import crawler_logger as logger
 
-RSS_FEEDS = {
+_DEFAULT_RSS_FEEDS = {
     # ── Tier 1: Major Global Tech Media ──────────────────────────────
     "TechCrunch": "https://techcrunch.com/feed/",
     "Wired": "https://www.wired.com/feed/rss",
@@ -55,6 +55,29 @@ RSS_FEEDS = {
     "Digital Trends": "https://www.digitaltrends.com/feed/",
     "ScienceDaily Tech": "https://www.sciencedaily.com/rss/computers_math.xml",
 }
+
+# Runtime-mutable feed registry (initialized from defaults)
+RSS_FEEDS: Dict[str, str] = dict(_DEFAULT_RSS_FEEDS)
+
+
+def get_feeds() -> Dict[str, str]:
+    """Return current RSS feeds (runtime mutable)."""
+    return dict(RSS_FEEDS)
+
+
+def add_feed(name: str, url: str) -> bool:
+    """Add or update an RSS feed. Returns True if new, False if updated."""
+    is_new = name not in RSS_FEEDS
+    RSS_FEEDS[name] = url
+    return is_new
+
+
+def remove_feed(name: str) -> bool:
+    """Remove an RSS feed by name. Returns True if removed."""
+    if name in RSS_FEEDS:
+        del RSS_FEEDS[name]
+        return True
+    return False
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",

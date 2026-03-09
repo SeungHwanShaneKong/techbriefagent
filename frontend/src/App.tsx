@@ -1,5 +1,6 @@
 import {
   BarChart3,
+  Bookmark,
   CircleAlert,
   Loader2,
   Newspaper,
@@ -10,19 +11,21 @@ import dayjs from "dayjs";
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  addBookmark,
+  fetchBookmarkedIds,
   fetchCrawlStatus,
   fetchDailyBrief,
   fetchNews,
   fetchNewsDates,
   fetchStats,
-  triggerCrawl,
-  triggerRepair,
+  removeBookmarkByArticle,
 } from "./api";
 import type {
   CrawlStatusResponse,
   DailyBriefResponse,
   NewsArticle,
   NewsDateInfo,
+  Notification,
   StatsResponse,
 } from "./types";
 import {
@@ -40,10 +43,13 @@ import Sidebar from "./components/layout/Sidebar";
 import StatCards from "./components/dashboard/StatCards";
 import OverviewTab from "./components/dashboard/OverviewTab";
 import ArticlesTab from "./components/dashboard/ArticlesTab";
+import CrawlProgressToast from "./components/common/CrawlProgressToast";
 
 const DailyReportTab = React.lazy(() => import("./components/dashboard/DailyReportTab"));
 const AgentTeamPanel = React.lazy(() => import("./components/AgentTeam/AgentTeamPanel"));
+const BookmarksTab = React.lazy(() => import("./components/dashboard/BookmarksTab"));
 const Chatbot = React.lazy(() => import("./components/Chatbot"));
+const AdminPage = React.lazy(() => import("./components/admin/AdminPage"));
 
 function LoadingFallback() {
   return (
@@ -63,11 +69,9 @@ export default function App() {
   const [selectedDate, setSelectedDate] = useState<string>(dayjs().format("YYYY-MM-DD"));
   const [selectedCategory, setSelectedCategory] = useState<string>("All");
   const [keyword, setKeyword] = useState<string>("");
-  const [minArticles, setMinArticles] = useState<number>(30);
   const [dailyBrief, setDailyBrief] = useState<DailyBriefResponse>(defaultDailyBrief(dayjs().format("YYYY-MM-DD")));
   const [articles, setArticles] = useState<NewsArticle[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
-  const [working, setWorking] = useState<boolean>(false);
   const [error, setError] = useState<string>("");
 
   const prevRunningRef = useRef<boolean>(false);
@@ -76,6 +80,32 @@ export default function App() {
   const abortRef = useRef<AbortController | null>(null);
   const [autoRefresh, setAutoRefresh] = useState<boolean>(true);
   const [lastRefreshed, setLastRefreshed] = useState<string>(dayjs().format("HH:mm:ss"));
+
+  /* ── Admin page state ── */
+  const [adminOpen, setAdminOpen] = useState(false);
+
+  /* ── Bookmarks state ── */
+  const [bookmarkedIds, setBookmarkedIds] = useState<Set<number>>(new Set());
+
+  /* ── Notifications state ── */
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const notifIdRef = useRef(0);
+
+  function addNotification(type: Notification["type"], message: string) {
+    const id = `notif-${notifIdRef.current++}`;
+    setNotifications((prev) => [
+      { id, type, message, timestamp: new Date().toISOString(), read: false },
+      ...prev,
+    ].slice(0, 50));
+  }
+
+  function clearNotifications() {
+    setNotifications([]);
+  }
+
+  function dismissNotification(id: string) {
+    setNotifications((prev) => prev.filter((n) => n.id !== id));
+  }
 
   /* ── UX#1: Pagination state ── */
   const ARTICLES_PER_PAGE = 20;
@@ -100,14 +130,12 @@ export default function App() {
     toastTimer.current = setTimeout(() => setToast(""), 2500);
   }
 
-  // F1: Cleanup toast timer on unmount to prevent memory leak
   useEffect(() => {
     return () => {
       if (toastTimer.current) clearTimeout(toastTimer.current);
     };
   }, []);
 
-  /** UX#5: Set keyword filter from any clickable keyword chip */
   function setSearchKeyword(kw: string) {
     setKeyword(kw);
   }
@@ -148,20 +176,15 @@ export default function App() {
     [dailyBrief.category_reports]
   );
 
-  // ── Patch ID: TEAM-MECE-FULLFIX-20260308-032800 ──
-  // Timestamp: 2026-03-08T03:28:00Z
-
   /* ── data fetching ── */
   const dateViewInFlight = useRef<boolean>(false);
   const mountedRef = useRef<boolean>(false);
 
-  // Refs to hold latest filter values – avoids stale closures in loadAll/silentRefresh
   const categoryRef = useRef(selectedCategory);
   const keywordRef = useRef(keyword);
   categoryRef.current = selectedCategory;
   keywordRef.current = keyword;
 
-  /** Format user-facing error from Axios or generic errors */
   const formatError = useCallback((err: unknown): string => {
     if (!err) return "알 수 없는 오류";
     const axiosErr = err as { response?: { status?: number; data?: { detail?: string } }; code?: string; message?: string };
@@ -175,11 +198,6 @@ export default function App() {
     return String(err);
   }, []);
 
-  /**
-   * loadDateViewsFor – fetch daily-brief + news for a specific date.
-   * Reads category/keyword from refs to always use latest values.
-   * Uses dateViewInFlight guard to prevent concurrent duplicate calls.
-   */
   const loadDateViewsFor = useCallback(async (targetDate: string, signal?: AbortSignal) => {
     if (dateViewInFlight.current) return;
     dateViewInFlight.current = true;
@@ -195,10 +213,13 @@ export default function App() {
     }
   }, []);
 
-  /**
-   * loadAll – initial data load. Runs ONCE on mount.
-   * Fetches core stats first, resolves the best date, then fetches date-specific views.
-   */
+  const loadBookmarkedIds = useCallback(async () => {
+    try {
+      const ids = await fetchBookmarkedIds();
+      setBookmarkedIds(new Set(ids));
+    } catch { /* ignore */ }
+  }, []);
+
   const loadAll = useCallback(async () => {
     try {
       setError("");
@@ -211,7 +232,6 @@ export default function App() {
       setCrawlStatus(statusData);
       setNewsDates(datesData);
 
-      // Resolve best date from refs (avoids stale closure)
       let resolvedDate = prevDateRef.current || dayjs().format("YYYY-MM-DD");
       if (datesData.length > 0 && !datesData.some((x) => x.date === resolvedDate)) {
         resolvedDate = datesData[0].date;
@@ -221,6 +241,7 @@ export default function App() {
         prevDateRef.current = resolvedDate;
         await loadDateViewsFor(resolvedDate);
       }
+      await loadBookmarkedIds();
     } catch (loadError) {
       const msg = formatError(loadError);
       setError(`데이터 로딩 실패: ${msg}`);
@@ -228,7 +249,7 @@ export default function App() {
       setLoading(false);
       setLastRefreshed(dayjs().format("HH:mm:ss"));
     }
-  }, [loadDateViewsFor, formatError]);
+  }, [loadDateViewsFor, formatError, loadBookmarkedIds]);
 
   const silentRefresh = useCallback(async () => {
     if (refreshInFlight.current) return;
@@ -243,20 +264,18 @@ export default function App() {
       setCrawlStatus(statusData);
       setNewsDates(datesData);
 
-      // Re-fetch date views using refs (always latest values)
       const curDate = prevDateRef.current;
       if (curDate) {
         await loadDateViewsFor(curDate);
       }
       setLastRefreshed(dayjs().format("HH:mm:ss"));
     } catch {
-      /* swallow – silent refresh should not disturb user */
+      /* swallow */
     } finally {
       refreshInFlight.current = false;
     }
   }, [loadDateViewsFor]);
 
-  // Run once on mount
   useEffect(() => {
     if (!mountedRef.current) {
       mountedRef.current = true;
@@ -264,7 +283,6 @@ export default function App() {
     }
   }, [loadAll]);
 
-  // Date change – only fires for USER-initiated date changes (after mount)
   useEffect(() => {
     if (!mountedRef.current) return;
     if (prevDateRef.current === selectedDate) return;
@@ -275,7 +293,6 @@ export default function App() {
     setExpandedArticles(new Set());
     setDateLoading(true);
 
-    // Cancel previous in-flight request
     if (abortRef.current) abortRef.current.abort();
     const controller = new AbortController();
     abortRef.current = controller;
@@ -289,12 +306,18 @@ export default function App() {
       .finally(() => setDateLoading(false));
   }, [selectedDate, loadDateViewsFor, formatError]);
 
+  // Detect crawl completion → add notification
   useEffect(() => {
     const prev = prevRunningRef.current;
     const cur = crawlStatus.is_running;
-    if (prev && !cur) void loadAll();
+    if (prev && !cur) {
+      void loadAll();
+      if (crawlStatus.current_phase === "completed") {
+        addNotification("crawl_complete", `수집 완료: ${crawlStatus.total_summarized}건 분석`);
+      }
+    }
     prevRunningRef.current = cur;
-  }, [crawlStatus.is_running, loadAll]);
+  }, [crawlStatus.is_running, crawlStatus.current_phase, crawlStatus.total_summarized, loadAll]);
 
   useEffect(() => {
     if (!autoRefresh) return;
@@ -303,7 +326,6 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [autoRefresh, silentRefresh, crawlStatus.is_running]);
 
-  /* ── UX#1: IntersectionObserver for infinite scroll ── */
   useEffect(() => {
     const el = sentinelRef.current;
     if (!el) return;
@@ -317,55 +339,54 @@ export default function App() {
     );
     observer.observe(el);
     return () => observer.disconnect();
-  }, []); // F5: Stable observer – sentinel element is always mounted
+  }, []);
 
-  /* ── actions ── */
-  // F2: Wrapped in useCallback to prevent unnecessary Sidebar re-renders
-  const handleCrawlStart = useCallback(async () => {
-    setWorking(true);
-    try {
-      const response = await triggerCrawl(minArticles);
-      setError("");
-      showToast(response.status);
-      const [statsData, statusData] = await Promise.all([fetchStats(), fetchCrawlStatus()]);
-      setStats(statsData);
-      setCrawlStatus(statusData);
-    } catch (e) {
-      setError(`수집 실행 실패: ${formatError(e)}`);
-    } finally {
-      setWorking(false);
+  /* ── Bookmark toggle ── */
+  const handleToggleBookmark = useCallback(async (articleId: number) => {
+    if (bookmarkedIds.has(articleId)) {
+      try {
+        await removeBookmarkByArticle(articleId);
+        setBookmarkedIds((prev) => { const next = new Set(prev); next.delete(articleId); return next; });
+        showToast("북마크가 해제되었습니다");
+      } catch {
+        showToast("북마크 해제 실패");
+      }
+    } else {
+      try {
+        await addBookmark(articleId);
+        setBookmarkedIds((prev) => new Set(prev).add(articleId));
+        showToast("북마크에 추가되었습니다");
+      } catch {
+        showToast("북마크 추가 실패");
+      }
     }
-  }, [minArticles, formatError]);
-
-  const handleRepair = useCallback(async () => {
-    setWorking(true);
-    try {
-      const response = await triggerRepair();
-      setError("");
-      showToast(response.status);
-      const [statsData, statusData] = await Promise.all([fetchStats(), fetchCrawlStatus()]);
-      setStats(statsData);
-      setCrawlStatus(statusData);
-    } catch (e) {
-      setError(`분석 보정 실행 실패: ${formatError(e)}`);
-    } finally {
-      setWorking(false);
-    }
-  }, [formatError]);
+  }, [bookmarkedIds]);
 
   /* ═══════════════════════════════════════════════════════════════════
      Loading State
      ═══════════════════════════════════════════════════════════════════ */
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-background">
+      <div className="flex min-h-screen items-center justify-center bg-background dark:bg-gray-900">
         <div className="flex flex-col items-center gap-4">
-          <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-primary-light">
+          <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-primary-light dark:bg-primary/20">
             <Loader2 className="h-8 w-8 animate-spin text-primary" />
           </div>
-          <p className="text-sm font-medium text-text-secondary">대시보드를 불러오는 중...</p>
+          <p className="text-sm font-medium text-text-secondary dark:text-gray-400">대시보드를 불러오는 중...</p>
         </div>
       </div>
+    );
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════
+     Admin Page (full overlay)
+     ═══════════════════════════════════════════════════════════════════ */
+  if (adminOpen) {
+    return (
+      <Suspense fallback={<LoadingFallback />}>
+        <AdminPage onClose={() => setAdminOpen(false)} showToast={showToast} />
+        <Toast message={toast} />
+      </Suspense>
     );
   }
 
@@ -374,8 +395,9 @@ export default function App() {
      ═══════════════════════════════════════════════════════════════════ */
   return (
     <ErrorBoundary>
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background dark:bg-gray-900 transition-colors">
       <Toast message={toast} />
+      <CrawlProgressToast crawlStatus={crawlStatus} />
 
       <Header
         sidebarOpen={sidebarOpen}
@@ -383,6 +405,10 @@ export default function App() {
         autoRefresh={autoRefresh}
         setAutoRefresh={setAutoRefresh}
         lastRefreshed={lastRefreshed}
+        onOpenAdmin={() => setAdminOpen(true)}
+        notifications={notifications}
+        onClearNotifications={clearNotifications}
+        onDismissNotification={dismissNotification}
       />
 
       <div className="mx-auto max-w-[1600px] px-5 py-6 lg:px-8">
@@ -400,12 +426,6 @@ export default function App() {
           <Sidebar
             sidebarOpen={sidebarOpen}
             setSidebarOpen={setSidebarOpen}
-            crawlStatus={crawlStatus}
-            minArticles={minArticles}
-            setMinArticles={setMinArticles}
-            working={working}
-            handleCrawlStart={handleCrawlStart}
-            handleRepair={handleRepair}
             selectedDate={selectedDate}
             setSelectedDate={setSelectedDate}
             selectedCategory={selectedCategory}
@@ -419,7 +439,7 @@ export default function App() {
 
           <main className="space-y-5 lg:col-span-9">
             <Tabs defaultValue="overview">
-              <TabsList>
+              <TabsList className="dark:bg-gray-800 dark:border-gray-700">
                 <TabsTrigger value="overview">
                   <TrendingUp className="mr-1.5 h-4 w-4" />
                   운영 현황
@@ -431,6 +451,10 @@ export default function App() {
                 <TabsTrigger value="articles">
                   <Newspaper className="mr-1.5 h-4 w-4" />
                   기사 분석
+                </TabsTrigger>
+                <TabsTrigger value="bookmarks">
+                  <Bookmark className="mr-1.5 h-4 w-4" />
+                  북마크
                 </TabsTrigger>
                 <TabsTrigger value="agents">
                   <Users className="mr-1.5 h-4 w-4" />
@@ -469,7 +493,19 @@ export default function App() {
                   sentinelRef={sentinelRef}
                   setSearchKeyword={setSearchKeyword}
                   showToast={showToast}
+                  bookmarkedIds={bookmarkedIds}
+                  onToggleBookmark={handleToggleBookmark}
+                  selectedCategory={selectedCategory}
                 />
+              </TabsContent>
+
+              <TabsContent value="bookmarks">
+                <Suspense fallback={<LoadingFallback />}>
+                  <BookmarksTab
+                    showToast={showToast}
+                    onBookmarkChange={loadBookmarkedIds}
+                  />
+                </Suspense>
               </TabsContent>
 
               <TabsContent value="agents">

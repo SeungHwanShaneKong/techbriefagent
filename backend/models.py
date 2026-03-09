@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import Column, DateTime, Float, ForeignKey, Index, Integer, String, Text, JSON
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -69,3 +69,41 @@ class LLMUsageLog(Base):
 
     def __repr__(self):
         return f"<LLMUsageLog(id={self.id}, model={self.model_name}, cost=${self.estimated_cost_usd:.6f})>"
+
+
+class Bookmark(Base):
+    __tablename__ = "bookmarks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    article_id = Column(Integer, ForeignKey("news_articles.id"), index=True)
+    note = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=get_kst_time)
+
+    article = relationship("NewsArticle")
+
+    __table_args__ = (
+        Index("ix_bookmark_article", "article_id"),
+    )
+
+    def __repr__(self):
+        return f"<Bookmark(id={self.id}, article_id={self.article_id})>"
+
+
+class AgentTaskLog(Base):
+    __tablename__ = "agent_task_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    task_id = Column(String(100), unique=True, index=True)
+    task_description = Column(Text)
+    agents_involved = Column(JSON, default=list)
+    synthesis = Column(Text)
+    total_cost_usd = Column(Float, default=0.0)
+    elapsed_ms = Column(Float, default=0.0)
+    created_at = Column(DateTime, default=get_kst_time)
+
+    __table_args__ = (
+        Index("ix_agent_task_created", "created_at"),
+    )
+
+    def __repr__(self):
+        return f"<AgentTaskLog(id={self.id}, task_id={self.task_id})>"

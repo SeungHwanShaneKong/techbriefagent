@@ -43,6 +43,10 @@ describe("Header", () => {
     autoRefresh: true,
     setAutoRefresh: vi.fn(),
     lastRefreshed: "12:00:00",
+    onOpenAdmin: vi.fn(),
+    notifications: [],
+    onClearNotifications: vi.fn(),
+    onDismissNotification: vi.fn(),
   };
 
   beforeEach(() => {

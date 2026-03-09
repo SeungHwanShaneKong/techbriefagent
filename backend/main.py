@@ -23,6 +23,9 @@ from .crawler import (
     count_recent_articles,
     crawl_until_minimum,
     repair_degraded_summaries,
+    get_feeds,
+    add_feed,
+    remove_feed,
 )
 
 import asyncio as _asyncio
@@ -98,7 +101,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_parsed_origins,
     allow_credentials=not _has_wildcard,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "X-Request-ID"],
 )
 
@@ -850,6 +853,424 @@ async def execute_agent_task(
     pm = get_pm_agent()
     result = await pm.orchestrate(task_desc, context, target_agents=body.target_agents)
     return result
+
+
+# ── MC-01: Admin endpoints ─────────────────────────────────────────
+# Patch ID: MC01-ADMIN-20260309-083000
+
+@app.get("/api/admin/config")
+def get_admin_config(db: Session = Depends(get_db)):
+    """Return current system configuration."""
+    feeds = get_feeds()
+    latest_model_row = (
+        db.query(models.LLMUsageLog.model_name)
+        .order_by(models.LLMUsageLog.id.desc())
+        .first()
+    )
+    current_model = latest_model_row[0] if latest_model_row else os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    return {
+        "min_articles": 30,
+        "crawl_rate_limit_seconds": CRAWL_RATE_LIMIT_SECONDS,
+        "chatbot_rate_limit_seconds": CHATBOT_RATE_LIMIT_SECONDS,
+        "brief_rate_limit_seconds": BRIEF_RATE_LIMIT_SECONDS,
+        "current_model": current_model,
+        "feeds": [{"name": n, "url": u} for n, u in feeds.items()],
+    }
+
+
+@app.put("/api/admin/config")
+def update_admin_config(body: schemas.AdminConfigUpdate):
+    """Update system configuration (rate limits)."""
+    global CRAWL_RATE_LIMIT_SECONDS, CHATBOT_RATE_LIMIT_SECONDS, BRIEF_RATE_LIMIT_SECONDS
+    if body.crawl_rate_limit_seconds is not None:
+        CRAWL_RATE_LIMIT_SECONDS = body.crawl_rate_limit_seconds
+    if body.chatbot_rate_limit_seconds is not None:
+        CHATBOT_RATE_LIMIT_SECONDS = body.chatbot_rate_limit_seconds
+    if body.brief_rate_limit_seconds is not None:
+        BRIEF_RATE_LIMIT_SECONDS = body.brief_rate_limit_seconds
+    return {"status": "ok", "message": "설정이 업데이트되었습니다."}
+
+
+@app.get("/api/admin/feeds")
+def get_admin_feeds():
+    """Return RSS feed list."""
+    feeds = get_feeds()
+    return [{"name": n, "url": u} for n, u in feeds.items()]
+
+
+@app.post("/api/admin/feeds")
+def add_admin_feed(body: schemas.FeedCreateRequest):
+    """Add a new RSS feed."""
+    is_new = add_feed(body.name, body.url)
+    return {"status": "added" if is_new else "updated", "name": body.name, "url": body.url}
+
+
+@app.delete("/api/admin/feeds/{feed_name}")
+def remove_admin_feed(feed_name: str):
+    """Remove an RSS feed by name."""
+    removed = remove_feed(feed_name)
+    if not removed:
+        raise HTTPException(status_code=404, detail=f"피드 '{feed_name}'를 찾을 수 없습니다.")
+    return {"status": "removed", "name": feed_name}
+
+
+@app.get("/api/admin/logs")
+def get_admin_logs(
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    """Return LLM usage logs with pagination."""
+    total = db.query(models.LLMUsageLog).count()
+    logs = (
+        db.query(models.LLMUsageLog)
+        .order_by(models.LLMUsageLog.id.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+    return {
+        "items": [
+            {
+                "id": log.id,
+                "model_name": log.model_name,
+                "prompt_tokens": log.prompt_tokens,
+                "completion_tokens": log.completion_tokens,
+                "total_tokens": log.total_tokens,
+                "estimated_cost_usd": log.estimated_cost_usd,
+                "created_at": log.created_at.isoformat() if log.created_at else None,
+            }
+            for log in logs
+        ],
+        "total": total,
+        "skip": skip,
+        "limit": limit,
+    }
+
+
+# ── MC-02: Global Search endpoint ─────────────────────────────────
+# Patch ID: MC02-SEARCH-20260309-083000
+
+@app.get("/api/search")
+def search_articles(
+    q: str = Query(..., min_length=1, max_length=200),
+    category: Optional[str] = None,
+    sentiment_min: Optional[float] = Query(default=None, ge=0, le=100),
+    sentiment_max: Optional[float] = Query(default=None, ge=0, le=100),
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    publisher: Optional[str] = None,
+    sort_by: str = Query(default="date", regex="^(date|sentiment|relevance)$"),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    """Full-text search across titles, summaries, and keywords."""
+    search_filter = f"%{q}%"
+    query = (
+        db.query(models.NewsArticle)
+        .outerjoin(models.AISummary, models.AISummary.article_id == models.NewsArticle.id)
+        .filter(
+            (models.NewsArticle.title.ilike(search_filter))
+            | (models.AISummary.summary_text.ilike(search_filter))
+            | (models.AISummary.keywords.ilike(search_filter))
+        )
+    )
+    if category:
+        query = query.filter(models.NewsArticle.category == category)
+    if publisher:
+        query = query.filter(models.NewsArticle.publisher.ilike(f"%{publisher}%"))
+    if sentiment_min is not None:
+        query = query.filter(models.AISummary.sentiment_score >= sentiment_min)
+    if sentiment_max is not None:
+        query = query.filter(models.AISummary.sentiment_score <= sentiment_max)
+    if date_from:
+        try:
+            df = datetime.strptime(date_from, "%Y-%m-%d")
+            query = query.filter(models.NewsArticle.pub_date >= df)
+        except ValueError:
+            pass
+    if date_to:
+        try:
+            dt = datetime.strptime(date_to, "%Y-%m-%d") + timedelta(days=1)
+            query = query.filter(models.NewsArticle.pub_date < dt)
+        except ValueError:
+            pass
+
+    total = query.count()
+
+    if sort_by == "sentiment":
+        query = query.order_by(models.AISummary.sentiment_score.desc().nullslast())
+    else:
+        query = query.order_by(models.NewsArticle.pub_date.desc())
+
+    rows = query.offset(offset).limit(limit).all()
+    results = []
+    for article in rows:
+        summary = db.query(models.AISummary).filter(models.AISummary.article_id == article.id).first()
+        results.append({
+            "id": article.id,
+            "title": article.title,
+            "original_url": article.original_url,
+            "publisher": article.publisher,
+            "pub_date": article.pub_date.isoformat() if article.pub_date else None,
+            "category": article.category,
+            "summary_text": summary.summary_text if summary else None,
+            "keywords": summary.keywords if summary else None,
+            "sentiment_score": summary.sentiment_score if summary else None,
+            "translated_title": summary.translated_title if summary else None,
+        })
+    return {"results": results, "total": total, "query": q}
+
+
+# ── MC-03: Bookmarks endpoints ────────────────────────────────────
+# Patch ID: MC03-BOOKMARK-20260309-083000
+
+@app.post("/api/bookmarks")
+def add_bookmark(body: schemas.BookmarkCreate, db: Session = Depends(get_db)):
+    """Add an article bookmark."""
+    article = db.query(models.NewsArticle).filter(models.NewsArticle.id == body.article_id).first()
+    if not article:
+        raise HTTPException(status_code=404, detail="기사를 찾을 수 없습니다.")
+    existing = db.query(models.Bookmark).filter(models.Bookmark.article_id == body.article_id).first()
+    if existing:
+        return {"id": existing.id, "article_id": existing.article_id, "note": existing.note, "created_at": existing.created_at.isoformat(), "status": "already_exists"}
+    bookmark = models.Bookmark(article_id=body.article_id, note=body.note)
+    db.add(bookmark)
+    db.commit()
+    db.refresh(bookmark)
+    return {"id": bookmark.id, "article_id": bookmark.article_id, "note": bookmark.note, "created_at": bookmark.created_at.isoformat(), "status": "created"}
+
+
+@app.delete("/api/bookmarks/{bookmark_id}")
+def remove_bookmark(bookmark_id: int, db: Session = Depends(get_db)):
+    """Remove a bookmark."""
+    bookmark = db.query(models.Bookmark).filter(models.Bookmark.id == bookmark_id).first()
+    if not bookmark:
+        raise HTTPException(status_code=404, detail="북마크를 찾을 수 없습니다.")
+    db.delete(bookmark)
+    db.commit()
+    return {"status": "removed", "id": bookmark_id}
+
+
+@app.delete("/api/bookmarks/article/{article_id}")
+def remove_bookmark_by_article(article_id: int, db: Session = Depends(get_db)):
+    """Remove a bookmark by article ID."""
+    bookmark = db.query(models.Bookmark).filter(models.Bookmark.article_id == article_id).first()
+    if not bookmark:
+        raise HTTPException(status_code=404, detail="북마크를 찾을 수 없습니다.")
+    db.delete(bookmark)
+    db.commit()
+    return {"status": "removed", "article_id": article_id}
+
+
+@app.get("/api/bookmarks")
+def get_bookmarks(db: Session = Depends(get_db)):
+    """Return all bookmarks with article data."""
+    bookmarks = (
+        db.query(models.Bookmark)
+        .order_by(models.Bookmark.created_at.desc())
+        .all()
+    )
+    result = []
+    for bm in bookmarks:
+        article = db.query(models.NewsArticle).options(joinedload(models.NewsArticle.summary)).filter(models.NewsArticle.id == bm.article_id).first()
+        result.append({
+            "id": bm.id,
+            "article_id": bm.article_id,
+            "note": bm.note,
+            "created_at": bm.created_at.isoformat() if bm.created_at else None,
+            "article": {
+                "id": article.id,
+                "title": article.title,
+                "original_url": article.original_url,
+                "publisher": article.publisher,
+                "pub_date": article.pub_date.isoformat() if article.pub_date else None,
+                "category": article.category,
+                "raw_content": article.raw_content or "",
+                "created_at": article.created_at.isoformat() if article.created_at else None,
+                "summary": {
+                    "id": article.summary.id,
+                    "article_id": article.summary.article_id,
+                    "summary_text": article.summary.summary_text,
+                    "keywords": article.summary.keywords,
+                    "sentiment_score": article.summary.sentiment_score,
+                    "translated_title": article.summary.translated_title,
+                } if article.summary else None,
+            } if article else None,
+        })
+    return result
+
+
+@app.get("/api/bookmarked-ids")
+def get_bookmarked_ids(db: Session = Depends(get_db)):
+    """Return set of bookmarked article IDs for quick lookup."""
+    ids = db.query(models.Bookmark.article_id).all()
+    return [row[0] for row in ids]
+
+
+# ── MC-04: Export endpoints ───────────────────────────────────────
+# Patch ID: MC04-EXPORT-20260309-083000
+
+from fastapi.responses import StreamingResponse
+import csv
+import io
+import json as json_mod
+
+
+@app.get("/api/export/articles")
+def export_articles(
+    format: str = Query(default="csv", regex="^(csv|json)$"),
+    target_date: Optional[str] = None,
+    category: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Export articles as CSV or JSON."""
+    query = db.query(models.NewsArticle).options(joinedload(models.NewsArticle.summary))
+    if target_date:
+        target_day = parse_target_date(target_date)
+        day_start, day_end = get_day_window(target_day)
+        query = query.filter(models.NewsArticle.pub_date >= day_start, models.NewsArticle.pub_date < day_end)
+    if category:
+        query = query.filter(models.NewsArticle.category == category)
+    articles = query.order_by(models.NewsArticle.pub_date.desc()).limit(500).all()
+
+    if format == "json":
+        data = []
+        for a in articles:
+            data.append({
+                "id": a.id,
+                "title": a.title,
+                "publisher": a.publisher,
+                "pub_date": a.pub_date.isoformat() if a.pub_date else None,
+                "category": a.category,
+                "original_url": a.original_url,
+                "summary": a.summary.summary_text if a.summary else None,
+                "keywords": a.summary.keywords if a.summary else None,
+                "sentiment_score": a.summary.sentiment_score if a.summary else None,
+                "translated_title": a.summary.translated_title if a.summary else None,
+            })
+        content = json_mod.dumps(data, ensure_ascii=False, indent=2)
+        return StreamingResponse(
+            io.BytesIO(content.encode("utf-8")),
+            media_type="application/json",
+            headers={"Content-Disposition": f"attachment; filename=articles_{target_date or 'all'}.json"},
+        )
+    else:
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["ID", "Title", "Publisher", "Date", "Category", "URL", "Summary", "Keywords", "Sentiment", "Translated Title"])
+        for a in articles:
+            writer.writerow([
+                a.id, a.title, a.publisher,
+                a.pub_date.isoformat() if a.pub_date else "",
+                a.category, a.original_url,
+                a.summary.summary_text if a.summary else "",
+                a.summary.keywords if a.summary else "",
+                a.summary.sentiment_score if a.summary else "",
+                a.summary.translated_title if a.summary else "",
+            ])
+        content = output.getvalue()
+        return StreamingResponse(
+            io.BytesIO(content.encode("utf-8-sig")),
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename=articles_{target_date or 'all'}.csv"},
+        )
+
+
+# ── MC-05: Analytics endpoints ───────────────────────────────────
+# Patch ID: MC05-ANALYTICS-20260309-083000
+
+@app.get("/api/analytics/sentiment-trend")
+def get_sentiment_trend(
+    days: int = Query(default=7, ge=1, le=30),
+    db: Session = Depends(get_db),
+):
+    """Return sentiment trend by date, overall and per category."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    rows = (
+        db.query(
+            func.date(models.NewsArticle.pub_date).label("day"),
+            models.NewsArticle.category,
+            func.avg(models.AISummary.sentiment_score).label("avg_sentiment"),
+            func.count(models.NewsArticle.id).label("cnt"),
+        )
+        .join(models.AISummary, models.AISummary.article_id == models.NewsArticle.id)
+        .filter(models.NewsArticle.pub_date >= cutoff)
+        .group_by("day", models.NewsArticle.category)
+        .order_by("day")
+        .all()
+    )
+
+    overall: Dict[str, dict] = {}
+    by_category: Dict[str, list] = {}
+    for row in rows:
+        day_str = str(row.day)
+        if day_str not in overall:
+            overall[day_str] = {"total_sentiment": 0.0, "total_count": 0}
+        overall[day_str]["total_sentiment"] += float(row.avg_sentiment or 50) * int(row.cnt)
+        overall[day_str]["total_count"] += int(row.cnt)
+
+        cat = row.category or "General Tech"
+        if cat not in by_category:
+            by_category[cat] = []
+        by_category[cat].append({"date": day_str, "avg_sentiment": round(float(row.avg_sentiment or 50), 2), "article_count": int(row.cnt)})
+
+    trend = []
+    for day_str, data in sorted(overall.items()):
+        avg = data["total_sentiment"] / max(data["total_count"], 1)
+        trend.append({"date": day_str, "avg_sentiment": round(avg, 2), "article_count": data["total_count"]})
+
+    return {"days": days, "trend": trend, "by_category": by_category}
+
+
+@app.get("/api/analytics/category-comparison")
+def get_category_comparison(
+    days: int = Query(default=7, ge=1, le=30),
+    db: Session = Depends(get_db),
+):
+    """Return category comparison with article count, sentiment, and keywords."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    rows = (
+        db.query(
+            models.NewsArticle.category,
+            func.count(models.NewsArticle.id).label("cnt"),
+            func.avg(models.AISummary.sentiment_score).label("avg_sentiment"),
+        )
+        .join(models.AISummary, models.AISummary.article_id == models.NewsArticle.id)
+        .filter(models.NewsArticle.pub_date >= cutoff)
+        .group_by(models.NewsArticle.category)
+        .all()
+    )
+
+    categories = []
+    for row in rows:
+        cat = row.category or "General Tech"
+        # Get top keywords for this category
+        kw_rows = (
+            db.query(models.AISummary.keywords)
+            .join(models.NewsArticle, models.AISummary.article_id == models.NewsArticle.id)
+            .filter(models.NewsArticle.pub_date >= cutoff, models.NewsArticle.category == row.category)
+            .limit(30)
+            .all()
+        )
+        kw_counter: Counter = Counter()
+        for kw_row in kw_rows:
+            if kw_row[0]:
+                for kw in kw_row[0].split(","):
+                    k = kw.strip()
+                    if k:
+                        kw_counter[k] += 1
+        top_kws = [k for k, _ in kw_counter.most_common(5)]
+        categories.append({
+            "category": cat,
+            "article_count": int(row.cnt),
+            "avg_sentiment": round(float(row.avg_sentiment or 50), 2),
+            "top_keywords": top_kws,
+        })
+
+    categories.sort(key=lambda x: x["article_count"], reverse=True)
+    return {"categories": categories}
 
 
 async def broadcast_log(message: str, level: str = "info"):

@@ -193,3 +193,99 @@ class AgentTeamResponse(BaseModel):
     pm: AgentInfo
     divisions: Dict[str, List[AgentInfo]]
     total_agents: int
+
+
+# ── Admin schemas ────────────────────────────────────────────────────
+class FeedInfo(BaseModel):
+    name: str
+    url: str
+
+class FeedCreateRequest(BaseModel):
+    name: str
+    url: str
+
+class AdminConfig(BaseModel):
+    min_articles: int = 30
+    crawl_rate_limit_seconds: int = 30
+    chatbot_rate_limit_seconds: int = 2
+    brief_rate_limit_seconds: int = 2
+    current_model: str = "gpt-4o-mini"
+    feeds: List[FeedInfo] = []
+
+class AdminConfigUpdate(BaseModel):
+    min_articles: Optional[int] = None
+    crawl_rate_limit_seconds: Optional[int] = None
+    chatbot_rate_limit_seconds: Optional[int] = None
+    brief_rate_limit_seconds: Optional[int] = None
+
+class AdminLogEntry(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    model_name: str
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    estimated_cost_usd: float
+    created_at: datetime
+
+
+# ── Search schemas ───────────────────────────────────────────────────
+class SearchResult(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    title: str
+    original_url: str
+    publisher: str
+    pub_date: datetime
+    category: str
+    summary_text: Optional[str] = None
+    keywords: Optional[str] = None
+    sentiment_score: Optional[float] = None
+    translated_title: Optional[str] = None
+
+class SearchResponse(BaseModel):
+    results: List[SearchResult]
+    total: int
+    query: str
+
+
+# ── Bookmark schemas ─────────────────────────────────────────────────
+class BookmarkCreate(BaseModel):
+    article_id: int
+    note: Optional[str] = None
+
+class BookmarkResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    article_id: int
+    note: Optional[str] = None
+    created_at: datetime
+    article: Optional[NewsArticle] = None
+
+
+# ── Analytics schemas ────────────────────────────────────────────────
+class SentimentTrendPoint(BaseModel):
+    date: str
+    avg_sentiment: float
+    article_count: int
+
+class SentimentTrendResponse(BaseModel):
+    days: int
+    trend: List[SentimentTrendPoint]
+    by_category: Dict[str, List[SentimentTrendPoint]]
+
+class CategoryComparisonItem(BaseModel):
+    category: str
+    article_count: int
+    avg_sentiment: float
+    top_keywords: List[str]
+
+class CategoryComparisonResponse(BaseModel):
+    categories: List[CategoryComparisonItem]
+
+
+# ── Chatbot enhanced schemas ────────────────────────────────────────
+class ChatSourceArticle(BaseModel):
+    id: int
+    title: str
+    original_url: str
