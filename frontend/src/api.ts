@@ -162,4 +162,30 @@ export async function sendChatbotMessage(
   return data;
 }
 
+// ── Agent Team API ──
+export interface AgentExecuteRequest {
+  task: string;
+  target_agents?: string[];
+}
+
+export async function fetchAgentTeam() {
+  const { data } = await api.get<import("./types").AgentTeamResponse>("/api/agent/team");
+  return data;
+}
+
+export async function fetchAgentStatus() {
+  const { data } = await api.get<import("./types").AgentTeamStatusResponse>("/api/agent/status");
+  return data;
+}
+
+export async function fetchAgentHistory(limit = 20) {
+  const { data } = await api.get<import("./types").AgentExecuteResponse[]>("/api/agent/history", { params: { limit } });
+  return data;
+}
+
+export async function executeAgentTask(request: AgentExecuteRequest) {
+  const { data } = await api.post<import("./types").AgentExecuteResponse>("/api/agent/execute", request);
+  return data;
+}
+
 export { API_BASE_URL };

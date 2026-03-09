@@ -146,3 +146,50 @@ class ChatbotResponse(BaseModel):
     answer: str                # 3 bullet points
     source_count: int          # number of articles referenced
     generated_with_model: bool
+
+
+# ── Agent Team schemas ───────────────────────────────────────────────
+class AgentInfo(BaseModel):
+    agent_id: str
+    name_ko: str
+    name_en: str
+    division: str
+    role_description: str
+    capabilities: List[str]
+
+
+class AgentExecuteRequest(BaseModel):
+    task: str
+    target_agents: Optional[List[str]] = None
+
+
+class AgentResultItem(BaseModel):
+    output: str
+    status: str
+    elapsed_ms: float = 0.0
+
+
+class AgentExecuteResponse(BaseModel):
+    task_id: str
+    status: str
+    task_description: str
+    agents_involved: List[str]
+    selection_reason: str
+    agent_results: Dict[str, AgentResultItem]
+    synthesis: str
+    total_cost_usd: float
+    elapsed_ms: float
+
+
+class AgentTeamStatusResponse(BaseModel):
+    is_running: bool
+    current_task_id: Optional[str] = None
+    agents_involved: List[str]
+    progress: List[Dict]
+    last_result: Optional[Dict] = None
+
+
+class AgentTeamResponse(BaseModel):
+    pm: AgentInfo
+    divisions: Dict[str, List[AgentInfo]]
+    total_agents: int

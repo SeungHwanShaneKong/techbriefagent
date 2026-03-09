@@ -133,3 +133,45 @@ export interface CrawlStatusResponse {
   updated_at?: string | null;
   message: string;
 }
+
+// ── Agent Team types ────────────────────────────────────────────────
+export interface AgentInfo {
+  agent_id: string;
+  name_ko: string;
+  name_en: string;
+  division: string;
+  role_description: string;
+  capabilities: string[];
+}
+
+export interface AgentTeamResponse {
+  pm: AgentInfo;
+  divisions: Record<string, AgentInfo[]>;
+  total_agents: number;
+}
+
+export interface AgentResultItem {
+  output: string;
+  status: string;
+  elapsed_ms: number;
+}
+
+export interface AgentExecuteResponse {
+  task_id: string;
+  status: string;
+  task_description: string;
+  agents_involved: string[];
+  selection_reason: string;
+  agent_results: Record<string, AgentResultItem>;
+  synthesis: string;
+  total_cost_usd: number;
+  elapsed_ms: number;
+}
+
+export interface AgentTeamStatusResponse {
+  is_running: boolean;
+  current_task_id?: string | null;
+  agents_involved: string[];
+  progress: Array<{ task_id: string; message: string; timestamp: number }>;
+  last_result?: Record<string, unknown> | null;
+}

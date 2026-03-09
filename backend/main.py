@@ -749,6 +749,109 @@ async def chatbot_query(
     return result
 
 
+# ── Agent Team endpoints ──────────────────────────────────────────────
+from .agent_team import get_all_agents, get_agents_by_division
+from .agent_team.pm_agent import get_pm_agent, AGENT_TEAM_STATE, AGENT_TASK_HISTORY
+from .agent_team.base import AgentContext
+
+
+@app.get("/api/agent/team", response_model=schemas.AgentTeamResponse)
+def get_agent_team():
+    """Return the full MECE agent team roster (PM + 12 workers)."""
+    pm = get_pm_agent()
+    all_agents = get_all_agents()
+    divisions: Dict[str, list] = {}
+    for a in all_agents:
+        divisions.setdefault(a.division, []).append(a.info())
+    return {
+        "pm": pm.info(),
+        "divisions": divisions,
+        "total_agents": 1 + len(all_agents),  # PM + workers
+    }
+
+
+@app.get("/api/agent/status", response_model=schemas.AgentTeamStatusResponse)
+def get_agent_status():
+    """Return current agent team execution state."""
+    return dict(AGENT_TEAM_STATE)
+
+
+@app.get("/api/agent/history")
+def get_agent_history(limit: int = Query(default=20, ge=1, le=50)):
+    """Return recent agent task execution history."""
+    return AGENT_TASK_HISTORY[-limit:]
+
+
+_last_agent_time: float = 0.0
+AGENT_RATE_LIMIT_SECONDS = 3
+
+
+@app.post("/api/agent/execute", response_model=schemas.AgentExecuteResponse, responses={429: _429_RATE_LIMITED_DESC})
+async def execute_agent_task(
+    body: schemas.AgentExecuteRequest,
+    db: Session = Depends(get_db),
+):
+    """Execute a task through the MECE agent team orchestrated by PM-1."""
+    global _last_agent_time
+    current_time = time.time()
+    async with _RATE_LIMIT_LOCK:
+        if current_time - _last_agent_time < AGENT_RATE_LIMIT_SECONDS:
+            remaining = AGENT_RATE_LIMIT_SECONDS - (current_time - _last_agent_time)
+            return rate_limit_response(remaining, f"요청이 너무 빠릅니다. {int(remaining)}초 후 다시 시도해 주세요.")
+        _last_agent_time = current_time
+
+    if AGENT_TEAM_STATE.get("is_running"):
+        raise HTTPException(status_code=409, detail="에이전트 팀이 이미 작업 중입니다.")
+
+    task_desc = body.task.strip()
+    if not task_desc:
+        raise HTTPException(status_code=400, detail="작업 설명을 입력해 주세요.")
+
+    # Build context from current DB state
+    cutoff = get_cutoff_time()
+    total_articles = db.query(models.NewsArticle).filter(models.NewsArticle.pub_date >= cutoff).count()
+    categories = dict(
+        db.query(models.NewsArticle.category, func.count(models.NewsArticle.id))
+        .filter(models.NewsArticle.pub_date >= cutoff)
+        .group_by(models.NewsArticle.category)
+        .all()
+    )
+    usage_row = db.query(
+        func.coalesce(func.sum(models.LLMUsageLog.estimated_cost_usd), 0.0),
+        func.coalesce(func.sum(models.LLMUsageLog.total_tokens), 0),
+        func.count(models.LLMUsageLog.id),
+    ).one()
+
+    recent_rows = (
+        db.query(models.NewsArticle, models.AISummary)
+        .outerjoin(models.AISummary, models.AISummary.article_id == models.NewsArticle.id)
+        .filter(models.NewsArticle.pub_date >= cutoff)
+        .order_by(models.NewsArticle.pub_date.desc())
+        .limit(30)
+        .all()
+    )
+    recent_articles = []
+    for article, summary in recent_rows:
+        recent_articles.append({
+            "title": article.title,
+            "category": article.category,
+            "publisher": article.publisher,
+            "sentiment_score": summary.sentiment_score if summary else 50.0,
+            "keywords": summary.keywords if summary else "",
+        })
+
+    context = AgentContext(
+        db_stats={"total_articles_48h": total_articles, "categories": categories},
+        recent_articles=recent_articles,
+        usage_data={"total_cost_usd": float(usage_row[0]), "total_tokens": int(usage_row[1]), "total_requests": int(usage_row[2])},
+        crawl_status=get_crawl_state_snapshot(),
+    )
+
+    pm = get_pm_agent()
+    result = await pm.orchestrate(task_desc, context, target_agents=body.target_agents)
+    return result
+
+
 async def broadcast_log(message: str, level: str = "info"):
     """Broadcast a log message to all connected WebSocket clients."""
     if not _ws_clients:

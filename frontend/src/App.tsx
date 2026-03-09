@@ -4,6 +4,7 @@ import {
   Loader2,
   Newspaper,
   TrendingUp,
+  Users,
 } from "lucide-react";
 import dayjs from "dayjs";
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -41,6 +42,7 @@ import OverviewTab from "./components/dashboard/OverviewTab";
 import ArticlesTab from "./components/dashboard/ArticlesTab";
 
 const DailyReportTab = React.lazy(() => import("./components/dashboard/DailyReportTab"));
+const AgentTeamPanel = React.lazy(() => import("./components/AgentTeam/AgentTeamPanel"));
 const Chatbot = React.lazy(() => import("./components/Chatbot"));
 
 function LoadingFallback() {
@@ -430,6 +432,10 @@ export default function App() {
                   <Newspaper className="mr-1.5 h-4 w-4" />
                   기사 분석
                 </TabsTrigger>
+                <TabsTrigger value="agents">
+                  <Users className="mr-1.5 h-4 w-4" />
+                  에이전트 팀
+                </TabsTrigger>
               </TabsList>
 
               <TabsContent value="overview">
@@ -464,6 +470,12 @@ export default function App() {
                   setSearchKeyword={setSearchKeyword}
                   showToast={showToast}
                 />
+              </TabsContent>
+
+              <TabsContent value="agents">
+                <Suspense fallback={<LoadingFallback />}>
+                  <AgentTeamPanel />
+                </Suspense>
               </TabsContent>
             </Tabs>
           </main>
