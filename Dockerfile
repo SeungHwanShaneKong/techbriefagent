@@ -36,6 +36,7 @@ RUN mkdir -p /app/data && touch /app/tech_news.db && touch /app/data/tech_news.d
 
 # HF Spaces requires port 7860
 ENV PORT=7860
+ENV CORS_ORIGINS="*"
 
 RUN useradd --create-home appuser && chown -R appuser:appuser /app
 USER appuser
